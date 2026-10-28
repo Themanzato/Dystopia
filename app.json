@@ -3,23 +3,52 @@
     "name": "dystopia",
     "slug": "dystopia",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "landscape",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "requireFullScreen": true,
+      "infoPlist": {
+        "CADisableMinimumFrameDurationOnPhone": true
+      }
     },
     "android": {
+      "package": "com.datasaints.dystopia",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": false,
+          "recordAudioAndroid": false,
+          "microphonePermission": false,
+          "enableBackgroundRecording": false
+        }
+      ],
+      "expo-asset"
+    ],
+    "scheme": "dystopia",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c2a0ecfc-1522-49cd-b3a1-a813c0d34032"
+      }
     }
   }
 }

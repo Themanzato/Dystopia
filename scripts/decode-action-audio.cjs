@@ -1,0 +1,10 @@
+const fs=require('fs'),path=require('path');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const root=path.resolve(__dirname,'..'),out=path.resolve(process.argv[2] || 'audio-decoded');fs.mkdirSync(out,{recursive:true});
+const originals=fs.readdirSync(path.join(root,'assets/sounds/sonidos por agregar'),{recursive:true}).filter(p=>p.endsWith('.mp3')).map(p=>'assets/sounds/sonidos por agregar/'+p.replaceAll('\\','/'));
+const provenance=path.join(root,'assets/sounds/mixed/sources.json');
+if(fs.existsSync(provenance))for(const c of JSON.parse(fs.readFileSync(provenance,'utf8')).cues)if(!originals.includes(c.source))originals.push(c.source);
+(async()=>{const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH ? {executablePath:process.env.CHROME_PATH} : {})});const page=await browser.newPage();const results=[];
+for(const source of originals){const result=await page.evaluate(async b64=>{const context=new AudioContext({sampleRate:48000});const buf=await context.decodeAudioData(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)).buffer);const n=buf.length,channels=buf.numberOfChannels;const raw=new Uint8Array(n*channels*4),view=new DataView(raw.buffer);for(let c=0;c<channels;c++){const v=buf.getChannelData(c);for(let i=0;i<n;i++)view.setFloat32((i*channels+c)*4,v[i],true);}let s='';for(let i=0;i<raw.length;i+=16384)s+=String.fromCharCode(...raw.subarray(i,i+16384));await context.close();return {rate:buf.sampleRate,channels,samples:n,duration:buf.duration,pcm:btoa(s)};},fs.readFileSync(path.join(root,source)).toString('base64'));const name=path.basename(source,'.mp3');fs.writeFileSync(path.join(out,name+'.f32'),Buffer.from(result.pcm,'base64'));delete result.pcm;results.push({source,name,...result});}
+fs.writeFileSync(path.join(out,'decoded.json'),JSON.stringify(results,null,2));await browser.close();console.log(results.map(x=>`${x.name}: ${x.duration.toFixed(3)}s, ${x.channels}ch`).join('\n'));
+})().catch(e=>{console.error(e);process.exitCode=1});
