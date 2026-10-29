@@ -11,6 +11,9 @@ import { AUDIO_MIX } from './audioMix';
 
 /** Monotonic simulation counters; pickup is deliberately consumed without a cue. */
 export type BattleAudioEvents = ActionSoundEvents & Record<'attack' | 'dash' | 'damage' | 'kill' | 'pickup' | 'level' | 'chest' | 'wave' | 'boss' | 'bossAttack' | 'bossIntro' | 'death' | 'shipAlarm' | 'zoneReward' | 'bossHit' | 'bossPhase' | 'bossBeep', number> & Partial<Record<'eventStart'|'eventComplete'|'eventCue'|'electricCharge'|'electricImpact',number>>;
+export type BattleAudioSnapshot = { events: BattleAudioEvents; mode: 'playing' | 'upgrade' | 'chest' | 'merchant' | 'dead' | 'won'; active:boolean };
+export const BATTLE_AUDIO_TOTAL = 36;
+const OPTIONAL_CUES = ['deathMusic', 'boss', 'bossHit', 'bossPhase', 'widowVoice1', 'widowVoice2'];
 type LegacyCue = Exclude<keyof Omit<BattleAudioEvents, keyof ActionSoundEvents>, 'pickup' | 'death' | 'bossIntro' | 'zoneReward'|'eventStart'|'eventComplete'|'eventCue'>;
 type Cue = LegacyCue | ActionSound;
 const OPTIONS = { updateInterval: 1000, keepAudioSessionActive: true, downloadFirst: false };
@@ -29,7 +32,7 @@ const isAction = (key: Cue): key is ActionSound => (ACTION_SOUND_KEYS as readonl
 const priority = (key: Cue) => key === 'damage' || key === 'dash' ? 4 : isAction(key) ? 3 : key === 'kill' || key === 'attack' ? 1 : 2;
 
 /** Persistent bounded players; animation/physics frames never create audio objects. */
-export function BattleAudio({ active, events, suspended = false, dead = false, onPrepared }: { active: boolean; events: BattleAudioEvents; suspended?: boolean; dead?: boolean; onPrepared?: (completed:number,total:number)=>void }) {
+export function BattleAudio({ active, events, suspended = false, dead = false, onPrepared, onError, sessionKey = 0, preparationActive = true }: { active: boolean; events: BattleAudioEvents; suspended?: boolean; dead?: boolean; onPrepared?: (completed:number,total:number)=>void; onError?: (message:string)=>void; sessionKey?:number; preparationActive?:boolean }) {
   const audio = useGameAudio();
   const music = useAudioPlayer(MUSIC, OPTIONS);
   const deathMusic = useAudioPlayer(DEATH_MUSIC, OPTIONS);
@@ -54,11 +57,26 @@ export function BattleAudio({ active, events, suspended = false, dead = false, o
   const effects = useMemo(() => ({ ...authored, electricCharge,electricImpact,attack, dash, damage, kill, level, chest, wave, boss, bossAttack, shipAlarm, bossHit, bossPhase, bossBeep }), [authored,electricCharge,electricImpact,attack, dash, damage, kill, level, chest, wave, boss, bossAttack, shipAlarm, bossHit, bossPhase, bossBeep]);
   const players=useMemo(()=>({music,deathMusic,...effects}),[music,deathMusic,effects]);
   const [prepared,setPrepared]=useState(()=>Object.values(players).every(player=>player.isLoaded&&!player.currentStatus?.error));
+  const [progress,setProgress]=useState({completed:0,total:Object.keys(players).length});
+  const [reset,setReset]=useState({key:sessionKey,ready:false});
+  const resetReady=reset.key===sessionKey&&reset.ready;
+  const criticalFailed=useRef(false), onErrorRef=useRef(onError);
   const failed=useRef(new Set<string>());
   const [recovery, setRecovery] = useState(0);
   const onPreparedRef=useRef(onPrepared);
-  useLayoutEffect(()=>{onPreparedRef.current=onPrepared;},[onPrepared]);
-  useEffect(()=>prepareAudioQueue(players,loadQueuedAudioPlayer,(completed,total)=>onPreparedRef.current?.(completed,total),()=>setPrepared(true),(key,reason)=>{
+  useLayoutEffect(()=>{onPreparedRef.current=onPrepared;onErrorRef.current=onError;},[onPrepared,onError]);
+  useEffect(()=>{ onPreparedRef.current?.(progress.completed+Number(audio.ready)+Number(resetReady),progress.total+2); },[progress,audio.ready,resetReady,sessionKey]);
+  useEffect(()=>{ if(audio.initializationError)onErrorRef.current?.(audio.initializationError); },[audio.initializationError]);
+  useEffect(()=>{
+    if(!preparationActive)return;
+    criticalFailed.current=false;
+    for(const [key,player] of Object.entries(players))if(player.isLoaded&&!player.currentStatus?.error)failed.current.delete(key);
+    // Returning from pause with resident players must not reset readiness or
+    // rewind the music. Only a new session key rewinds the existing players.
+    // Synchronize the gate with the external native players before subscribing.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPrepared(Object.entries(players).every(([key,player])=>OPTIONAL_CUES.includes(key)||player.isLoaded&&!player.currentStatus?.error));
+    return prepareAudioQueue(players,loadQueuedAudioPlayer,(completed,total)=>setProgress({completed,total}),()=>{if(!criticalFailed.current)setPrepared(true);},(key,reason)=>{
     failed.current.add(key);
     try{players[key as keyof typeof players].pause();}catch{/* An optional failed player must remain silent. */}
     console.warn(`Dystopia: audio ${key} desactivado: ${reason}`);
@@ -68,20 +86,38 @@ export function BattleAudio({ active, events, suspended = false, dead = false, o
     // These are pending, not corrupt or permanently disabled. Their listeners
     // and bounded queue stay alive, but no stale combat event is replayed.
     for (const key of keys) failed.current.add(key);
-  }),[players]);
+  },{essential:Object.keys(players).filter(key=>!OPTIONAL_CUES.includes(key)),essentialError:(key,reason)=>{criticalFailed.current=true;setPrepared(false);onErrorRef.current?.(`Audio ${key}: ${reason}`);}});
+  },[players,sessionKey,preparationActive]);
   const previous = useRef<BattleAudioEvents>({ ...events });
   const lastCue = useRef<Partial<Record<Cue, number>>>({});
   const voices = useRef<Cue[]>([]);
   const foreground = useRef(AppState.currentState === 'active');
-  const current = useRef({ active, suspended, dead, ready: audio.ready && prepared, settings: audio.settings });
+  const current = useRef({ active, suspended, dead, ready: audio.ready && prepared && resetReady, settings: audio.settings });
   const wasDead = useRef(false);
   const warned = useRef(false);
   const report = useCallback(() => {
     if (!warned.current) { warned.current = true; console.warn('Dystopia: battle audio unavailable; continuing silently.'); }
   }, []);
 
+  useLayoutEffect(()=>{
+    previous.current={...events};lastCue.current={};voices.current=[];wasDead.current=false;
+    try{music.pause();deathMusic.pause();for(const player of Object.values(effects))player.pause();}catch{report();}
+    // New run identity clears cue history without recreating a native player.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[sessionKey,music,deathMusic,effects,report]);
+  useLayoutEffect(()=>{
+    let live=true;
+    let timeout:ReturnType<typeof setTimeout>|undefined;
+    if(prepared&&!criticalFailed.current){
+      const fail=()=>{if(live){live=false;onErrorRef.current?.('No se pudo reiniciar el audio de la partida. Reintenta.');}};
+      timeout=setTimeout(fail,20000);
+      void Promise.resolve().then(()=>live?music.seekTo(0):undefined).then(()=>{clearTimeout(timeout);if(live)setReset({key:sessionKey,ready:true});}).catch(()=>{clearTimeout(timeout);fail();});
+    }
+    return()=>{live=false;clearTimeout(timeout);};
+  },[sessionKey,prepared,music,deathMusic]);
+
   useLayoutEffect(() => {
-    current.current = { active, suspended, dead, ready: audio.ready && prepared, settings: audio.settings };
+    current.current = { active, suspended, dead, ready: audio.ready && prepared && resetReady, settings: audio.settings };
     try {
       music.loop = true;
       deathMusic.loop = true;
@@ -94,14 +130,14 @@ export function BattleAudio({ active, events, suspended = false, dead = false, o
       // Rewind on each new defeat, never on a settings change or background return.
       if (dead && !wasDead.current) { deathMusic.pause(); void deathMusic.seekTo(0).catch(report); }
       wasDead.current = dead;
-      const canPlay = prepared && active && foreground.current && audio.ready && !audio.settings.muted && audio.settings.music > 0;
+      const canPlay = prepared && resetReady && active && foreground.current && audio.ready && !audio.settings.muted && audio.settings.music > 0;
       // Stop the old track first, so defeat never overlaps battle music.
       if (!canPlay || suspended || dead) music.pause();
       if (!canPlay || !dead) deathMusic.pause();
       if (canPlay && dead && !failed.current.has('deathMusic')) { if (!deathMusic.playing) deathMusic.play(); }
       else if (canPlay && !dead && !suspended && !failed.current.has('music') && !music.playing) music.play();
     } catch { report(); }
-  }, [active, suspended, dead, audio.ready, audio.settings, music, deathMusic, effects, report, prepared, recovery]);
+  }, [active, suspended, dead, audio.ready, audio.settings, music, deathMusic, effects, report, prepared, resetReady, recovery]);
 
   useLayoutEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
@@ -133,7 +169,7 @@ export function BattleAudio({ active, events, suspended = false, dead = false, o
     const before = previous.current;
     previous.current = { ...events };
     // Consume muted/paused/dead events, including silent EXP pickups. No burst on resume.
-    if (!prepared || !active || dead || !foreground.current || !audio.ready || audio.settings.muted || audio.settings.effects <= 0) return;
+    if (!prepared || !resetReady || !active || dead || !foreground.current || !audio.ready || audio.settings.muted || audio.settings.effects <= 0) return;
     const now = Date.now();
     let budget = 3;
     // Stop events carry their owner's last cue counter; no late promise/timer
@@ -177,7 +213,7 @@ export function BattleAudio({ active, events, suspended = false, dead = false, o
         voices.current.push(key);
       } catch { report(); }
     }
-  }, [active, suspended, dead, events, audio.ready, audio.settings, effects, report, prepared]);
+  }, [active, suspended, dead, events, audio.ready, audio.settings, effects, report, prepared, resetReady]);
 
   return null;
 }

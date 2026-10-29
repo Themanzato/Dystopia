@@ -9,7 +9,7 @@ export default function BossHitHUD({survival,children,style}:{survival:SharedVal
   const motion=useAnimatedStyle(()=>{
     const state=survival.value;
     let remaining=Math.max(state.boss?.hitFlashMs??0,state.partner?.hitFlashMs??0);
-    for(const mini of state.minibosses)if(mini.packMember)remaining=Math.max(remaining,mini.hitFlashMs??0);
+    for(const mini of state.minibosses)if(mini.packMember||mini.id==='the-plague')remaining=Math.max(remaining,mini.hitFlashMs??0);
     const offset=bossHitOffset(remaining);
     return {transform:[{translateX:offset.x},{translateY:offset.y}]};
   });

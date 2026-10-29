@@ -50,7 +50,7 @@ function isolated(fn, ...args) {
 
 const { canStartSpecial, hasLivingSpecial } = load('src/game/worldEvents.ts');
 const { PURGATORIO_ROSTER } = load('src/game/purgatorio.ts');
-assert.equal(PURGATORIO_ROSTER.length, 13, 'Pair has exactly one selectable encounter');
+assert.equal(PURGATORIO_ROSTER.length, 14, 'Pair has exactly one selectable encounter and The Plague is one swarm encounter');
 assert(!PURGATORIO_ROSTER.includes('archer-bandit'));
 function unpause(s) { while (s.mode === 'upgrade') s = chooseUpgrade(s, s.choices[0], s.upgradeOfferId); return s; }
 function start(id, difficulty) {

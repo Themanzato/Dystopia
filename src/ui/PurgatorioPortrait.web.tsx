@@ -1,11 +1,12 @@
 import React from 'react';
 import { Image, Platform, View, type ImageStyle } from 'react-native';
-import { LOADING_ENTITIES } from './loadingCatalog';
+import { LOADING_ENTITIES, type LoadingEntity } from './loadingCatalog';
 import type { SpecialEnemyId } from '../game/purgatorio';
 
 // Original PNG dimensions; the gallery already audits each cell and alpha union.
 // Cropped Views reuse those sources without new bitmaps or per-card canvases.
 const SHEET_SIZES: Record<SpecialEnemyId, {width:number;height:number}> = {
+  'the-plague':{width:704,height:37},
   electrocutioner:{width:1884,height:107},
   "shielder": {
     "width": 774,
@@ -60,9 +61,9 @@ const SHEET_SIZES: Record<SpecialEnemyId, {width:number;height:number}> = {
     "height": 720
   }
 };
-export default function PurgatorioPortrait({ id, width = 96, height = 68, pixelScale }: {id:SpecialEnemyId;width?:number;height?:number;pixelScale?:number}) {
-  const entity = LOADING_ENTITIES.find(e=>e.id===id)!;
-  const b = entity.bounds, sheet = SHEET_SIZES[id];
+export default function PurgatorioPortrait({ id, width = 96, height = 68, pixelScale,entity:providedEntity,sheetSize }: {id:SpecialEnemyId;width?:number;height?:number;pixelScale?:number;entity?:LoadingEntity;sheetSize?:{width:number;height:number}}) {
+  const entity = providedEntity ?? LOADING_ENTITIES.find(e=>e.id===id)!;
+  const b = entity.bounds, sheet = sheetSize ?? SHEET_SIZES[id];
   const scale = Math.min((width-8)/b.width,(height-6)/b.height,pixelScale ?? Infinity);
   const nearest = Platform.OS === 'web' ? {imageRendering:'pixelated'} as ImageStyle : undefined;
   return <View accessibilityLabel={entity.name} pointerEvents="none" style={{width,height,alignItems:'center',justifyContent:'center'}}>

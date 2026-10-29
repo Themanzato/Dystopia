@@ -64,17 +64,22 @@ export function prepareAudioQueue<P extends PreparedAudioPlayer>(
   fail: (key: string, reason: string) => void,
   recovered: (key: string) => void,
   deferred: (keys: string[]) => void,
+  policy: { essential?: readonly string[]; essentialError?: (key: string, reason: string) => void; transferTimeoutMs?: number } = {},
 ): () => void {
   const entries = Object.entries(players);
+  const essential = new Set(policy.essential ?? []);
   const settled = new Set<string>(), delayed = new Set<string>();
   const pending = entries.filter(([,p]) => !p.isLoaded || p.currentStatus?.error);
   const listeners = new Map<string, {remove(): void}>();
   const decodeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const transferTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const resourceError = (key: string, reason: string) => { fail(key, reason); if (essential.has(key)) policy.essentialError?.(key, reason); };
   let disposed = false, finished = false, installing = true, active = 0, index = 0;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const clearDecode = (key: string) => {
     const timer = decodeTimers.get(key); if (timer !== undefined) clearTimeout(timer);
     decodeTimers.delete(key);
+    const transfer = transferTimers.get(key); if (transfer !== undefined) clearTimeout(transfer); transferTimers.delete(key);
   };
   const finish = () => {
     if (!disposed && !installing && !finished && settled.size === entries.length) {
@@ -90,7 +95,7 @@ export function prepareAudioQueue<P extends PreparedAudioPlayer>(
     if (finished || disposed) return;
     if (idleTimer !== undefined) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      const keys = entries.filter(([key]) => !settled.has(key)).map(([key]) => key);
+      const keys = entries.filter(([key]) => !essential.has(key) && !settled.has(key)).map(([key]) => key);
       for (const key of keys) delayed.add(key);
       deferred(keys);
       for (const key of keys) settle(key);
@@ -100,18 +105,18 @@ export function prepareAudioQueue<P extends PreparedAudioPlayer>(
     if (disposed) return;
     while (active < AUDIO_PREPARATION_CONCURRENCY && index < pending.length) {
       const [key, player] = pending[index++]; active++;
-      let released = false, ended = false;
+      let released = false, ended = false, submitted = false;
       const release = () => {
         if (released) return; released = true; active--; clearDecode(key); pump();
       };
       const inspect = (status?: PreparationStatus) => {
         if (disposed || ended) return;
-        if (status?.error) {
+        if (status?.error && submitted) {
           ended = true; listeners.get(key)?.remove(); listeners.delete(key);
-          delayed.delete(key); fail(key, status.error); settle(key); idle(); release();
+          delayed.delete(key); resourceError(key, status.error); settle(key); idle(); release();
         // SDK57 web currentStatus reports isLoaded:true even on an empty
         // media element. The player's actual loaded getter is authoritative.
-        } else if (player.isLoaded) {
+        } else if (player.isLoaded && !status?.error) {
           ended = true; listeners.get(key)?.remove(); listeners.delete(key);
           if (delayed.delete(key)) recovered(key);
           settle(key); idle(); release();
@@ -122,26 +127,38 @@ export function prepareAudioQueue<P extends PreparedAudioPlayer>(
         // Do not retain a listener after synchronous native readiness.
         if (ended) subscription.remove(); else listeners.set(key, subscription);
         inspect(player.currentStatus);
+        // Even an optional hung transfer must eventually release its queue slot,
+        // otherwise three optional files could starve essential files behind them.
+        if (!ended) transferTimers.set(key, setTimeout(() => {
+          if (disposed || ended) return;
+          ended = true; listeners.get(key)?.remove(); listeners.delete(key);
+          resourceError(key, 'No se pudo preparar el sonido necesario. Reintenta.'); settle(key); release();
+        }, policy.transferTimeoutMs ?? 30000));
         if (!ended) void Promise.resolve().then(() => {
-          if (!disposed) return load(player, () => !disposed && !ended);
+          if (!disposed) { submitted=true;return load(player, () => !disposed && !ended); }
         }).then(() => {
           if (disposed || ended) return;
+          const transfer = transferTimers.get(key); if (transfer !== undefined) clearTimeout(transfer); transferTimers.delete(key);
           // Only the native preparation gets a per-player decode timeout.
           // File downloads waiting in the queue never use this budget.
           idle(); inspect(player.currentStatus);
           if (!ended) decodeTimers.set(key, setTimeout(() => {
+            if (essential.has(key)) {
+              ended = true; listeners.get(key)?.remove(); listeners.delete(key);
+              resourceError(key, 'El dispositivo no pudo preparar este sonido. Reintenta.'); settle(key); release(); return;
+            }
             delayed.add(key); deferred([key]); settle(key); release();
             // Keep this listener: a delayed STATE_READY recovers the cue.
           }, OPTIONAL_AUDIO_TIMEOUT_MS));
         }).catch(cause => {
           if (disposed || ended) return;
           ended = true; listeners.get(key)?.remove(); listeners.delete(key);
-          delayed.delete(key); fail(key, cause instanceof Error ? cause.message : String(cause));
+          delayed.delete(key); resourceError(key, cause instanceof Error ? cause.message : String(cause));
           settle(key); idle(); release();
         });
       } catch (cause) {
         ended = true; listeners.get(key)?.remove(); listeners.delete(key);
-        fail(key, cause instanceof Error ? cause.message : String(cause)); settle(key); idle(); release();
+        resourceError(key, cause instanceof Error ? cause.message : String(cause)); settle(key); idle(); release();
       }
     }
   };
@@ -151,6 +168,7 @@ export function prepareAudioQueue<P extends PreparedAudioPlayer>(
   return () => {
     disposed = true; if (idleTimer !== undefined) clearTimeout(idleTimer);
     for (const key of decodeTimers.keys()) clearDecode(key);
+    for (const timer of transferTimers.values()) clearTimeout(timer); transferTimers.clear();
     for (const listener of listeners.values()) listener.remove(); listeners.clear();
   };
 }

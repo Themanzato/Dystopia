@@ -23,6 +23,7 @@ export type BossHazard = {
   fx?: BossFxKey | string; scale?: number; visualLift?: number; npcBurst?: number; followMs?: number; followOffsetX?: number; followOffsetY?: number; emitted?: boolean;
   halfHeight?: number;
   damageMs?:number;
+  travelSpeed?: number; maxLength?: number;
 };
 export type FxClip = { image: number; x: number; y: number; width: number; height: number; frames: number; columns: number; stepX: number; stepY: number; pivotX: number; pivotY: number; scale: number };
 export const BOSS_FX_CLIPS = {

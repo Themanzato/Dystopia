@@ -69,6 +69,7 @@ const originalLoad = Module._load;
 Module._load = function(name, parent, main) {
   if (name === '@react-native-async-storage/async-storage') return {__esModule:true,default:{getItem:async key=>saved.get(key)??null,setItem:async(key,value)=>{saved.set(key,value)}}};
   if (name === './PixelText' && /(?:Menus|DifficultyMenu|PurgatorioMenu|PausePowerups|ScoreMenu|MenuEconomy|EquipmentPreview|WorkshopMenu|TutorialOffer)\.tsx$/.test(parent?.filename||'')) return { __esModule: true, default: props => React.createElement('PixelProbe', props) };
+  if (name === './WorkshopDemonstration') return {__esModule:true,default:props=>React.createElement('WorkshopPreviewProbe',props)};
   if (name === './UpgradeIcon') return {__esModule:true,default:props=>React.createElement('UpgradeIconProbe',props)};
   if (name === './PurgatorioPortrait') return {__esModule:true,default:props=>React.createElement('PortraitProbe',props)};
   if (name === './ControlSettingsPanel') return { __esModule: true, default: props => React.createElement('ControlSettingsProbe', props) };
@@ -86,6 +87,7 @@ Module._load = function(name, parent, main) {
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
   };
   if (parent?.filename.endsWith('Application.tsx')) {
+    if(name==='./BattleAudio')return {BATTLE_AUDIO_TOTAL:36,BattleAudio:props=>React.createElement('BattleAudioProbe',props)};
     if (name === './MenuPreparation') return { __esModule: true, default: ({ children }) => children };
     if (name === '../game/CourtyardScreen') return { __esModule: true, default: GameProbe };
     if (name === './MenuBackdrop') return { __esModule: true, default: props => React.createElement('BackdropProbe', props) };

@@ -15,6 +15,15 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
 }).outputText, {
   module: moduleValue, exports: moduleValue.exports,
   require: id => {
+    if (id === './plaguePortraits') {
+      const target = path.join(project, 'src/ui/plaguePortraits.ts'), nested = { exports: {} };
+      vm.runInNewContext(ts.transpileModule(fs.readFileSync(target, 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+      }).outputText, { module: nested, exports: nested.exports, require: asset => {
+        assert(asset.endsWith('.png')); return path.resolve(path.dirname(target), asset);
+      } }, { filename: target });
+      return nested.exports;
+    }
     assert(id.endsWith('.png'), 'The catalog has only existing PNG dependencies');
     return path.resolve(path.dirname(filename), id);
   },
@@ -59,7 +68,7 @@ function readPng(filename) {
 }
 
 const expected = {
-  ghoul: [558, 33, 9], spitter: [342, 39, 6], summoner: [276, 44, 6],
+  ghoul: [558, 33, 9], spitter: [342, 39, 6], summoner: [276, 44, 6], 'the-plague': [704, 37, 8],
   shielder: [774, 46, 6], 'evil-sage': [832, 294, 9], guardian: [3984, 96, 24],
   'skeleton-summoner': [1584, 83, 12], 'dagger-bandit': [1024, 78, 8],
   archer: [174, 500, 20], 'bomb-droid': [32, 192, 6], 'dagger-mush': [144, 400, 5],
@@ -122,7 +131,7 @@ for (const entity of LOADING_ENTITIES) {
     assert.equal(image.height, entity.cell.height * entity.frames, 'Entire original vertical strip is used');
   } else assert.equal(image.width, entity.cell.width * entity.frames, 'Entire original horizontal strip is used');
 }
-assert.equal(frameCount, 184);
+assert.equal(frameCount, 192);
 assert(LOADING_TIPS.length >= 12);
 assert.equal(new Set(LOADING_TIPS).size, LOADING_TIPS.length, 'Advice messages are distinct');
 assert(LOADING_TIPS.every(tip => tip.length > 15 && tip.length <= 60));

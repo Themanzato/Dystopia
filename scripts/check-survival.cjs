@@ -29,6 +29,8 @@ const map = load('src/game/map.ts');
 const catalog = load('src/game/enemyCatalog.ts');
 const { bossAttack } = load('src/game/bossAttacks.ts');
 const { MINIBOSS_IDS, BOSS_IDS, MINION_IDS, ENEMY_DEFS } = catalog;
+const { PLAGUE_BALANCE } = load('src/game/plague.ts');
+const { PLAGUE_VISUALS, PLAGUE_BOUNDS } = load('src/game/plagueAssets.ts');
 const { createSurvival, advanceSurvival, chooseUpgrade, chooseChest, wavePlan, applyPlayerUpgrades, xpRequirement, SURVIVAL_CONFIG, UPGRADE_INFO, selectEnemy } = api;
 let origin;
 for (let y = 950; !origin && y <= 1900; y += 24) for (let x = 900; !origin && x <= 2000; x += 24) {
@@ -71,7 +73,7 @@ for (const [tier, pool] of [['mini', MINIBOSS_IDS], ['boss', BOSS_IDS.filter(id=
   }
   assert.equal(seen.size, pool.length, `Entire ${tier} asset catalog is reachable`);
 }
-assert.equal(MINIBOSS_IDS.length, 6); assert.equal(BOSS_IDS.length, 8); assert.equal(MINION_IDS.length, 3);
+assert.equal(MINIBOSS_IDS.length, 7); assert.equal(BOSS_IDS.length, 8); assert.equal(MINION_IDS.length, 3);
 
 // All three actual species are scheduled, slots stay bounded and spawns remain
 // outside the player/buildings against real geometry, not a mocked empty map.
@@ -114,10 +116,28 @@ for (const station of stations) for (const priorWave of [4, 9]) {
   let scene = createSurvival(1241 + bossSpawns); scene.encounter = { ...scene.encounter, wave: priorWave, timerMs: 0 };
   for (let i = 0; i < 100 && !scene.boss; i++) scene = advanceSurvival(scene, player, player, localField, 40);
   assert(scene.boss, `Boss spawn remains available near route ${station.x},${station.y}`);
-  const b = scene.boss; assert(Math.hypot(b.x - player.x, b.y - player.y) >= 300);
-  for (const prop of [...map.PROPS, ...map.ANIMATED_PROPS].filter(p => !p.groundDetail)) {
-    const r = prop.destination;
-    assert(!(b.x - 70 < r.x + r.width + 5 && b.x + 70 > r.x - 5 && b.y - 120 < r.y + r.height + 5 && b.y + 10 > r.y - 5));
+  const b = scene.boss;
+  if (b.id === 'the-plague') {
+    const swarm = [b, ...scene.minibosses].filter(m => m.plague);
+    assert(swarm.length >= 6 && swarm.length <= PLAGUE_BALANCE.maxInsects, 'The entire bounded swarm is admitted together');
+    assert.equal(swarm.length, scene.plague.memberIds.length);
+    for (const fly of swarm) {
+      const clip = PLAGUE_VISUALS[fly.plague.variant].idle, alpha = PLAGUE_BOUNDS[fly.plague.variant];
+      assert.equal(clip.width, fly.plague.variant === 'small' ? 20 : fly.plague.variant === 'medium' ? 34 : fly.plague.variant === 'medium2' ? 88 : 72);
+      assert(alpha.x >= 0 && alpha.y >= 0 && alpha.x + alpha.width <= clip.width && alpha.y + alpha.height <= clip.height, 'Spawn checks use real insect silhouettes rather than a humanoid roof box');
+      assert(collision.isWalkable(fly.x, fly.y) && nav.isReachable(fly, localField));
+      assert(Math.hypot(fly.x - player.x, fly.y - player.y) >= PLAGUE_BALANCE.spawnSafeDistance, 'Every actual insect starts safely away from the player');
+      const facing = fly.facingX * clip.authoredFacing;
+      const x0 = fly.x + (alpha.x - clip.pivotX) * clip.scale * facing, x1 = x0 + alpha.width * clip.scale * facing;
+      const left = Math.min(x0, x1), right = Math.max(x0, x1), top = fly.y + (alpha.y - clip.pivotY) * clip.scale, bottom = top + alpha.height * clip.scale;
+      assert(!(left < player.x + 9 && right > player.x - 9 && top < player.y && bottom > player.y - 40), 'The visible original insect body never starts on the hero');
+    }
+  } else {
+    assert(Math.hypot(b.x - player.x, b.y - player.y) >= 300);
+    for (const prop of [...map.PROPS, ...map.ANIMATED_PROPS].filter(p => !p.groundDetail)) {
+      const r = prop.destination;
+      assert(!(b.x - 70 < r.x + r.width + 5 && b.x + 70 > r.x - 5 && b.y - 120 < r.y + r.height + 5 && b.y + 10 > r.y - 5));
+    }
   }
   bossSpawns++;
 }
@@ -240,7 +260,10 @@ assert.equal(s.boss.hp, 8, 'The blocked swing cannot hit again by rotating');
 s = bossFixture(); s.boss.facingX = 1; s = step(s, 4, swing, swingAfter);
 assert.equal(s.boss.hp, 7, 'Rear swing hurts the Shielder');
 s = step(s, 4, swing, swingAfter); assert.equal(s.boss.hp, 7);
-for (const id of [...MINIBOSS_IDS, ...BOSS_IDS, ...MINION_IDS]) {
+// These fixtures model a single legacy actor. The Plague's real shared swarm,
+// sting windows, deaths and once-only reward are exercised in check-plague.cjs.
+const legacySingleActors = [...MINIBOSS_IDS.filter(id => id !== 'the-plague'), ...BOSS_IDS, ...MINION_IDS];
+for (const id of legacySingleActors) {
   s = bossFixture(id); const startX = s.boss.x;
   for (let i = 0; i < 70; i++) { s = step(s); assert.equal(s.projectiles.length, 0); }
   if (bossAttack(id).speed > 0 && id !== 'shock-sweeper') assert(s.boss.x < startX, id + ' advances toward its locked direction');
@@ -271,7 +294,7 @@ for (let cycle = 0; cycle < 3; cycle++) {
 assert.equal(skeleton.minibosses.length, 6, 'Three authored casts create three groups of two');
 assert(skeleton.minibosses.every(n => MINION_IDS.includes(n.id) && n.hp === 1));
 // Death is an authored clip, not an immediately re-hittable/rewardable actor.
-for (const id of [...MINIBOSS_IDS, ...BOSS_IDS, ...MINION_IDS]) {
+for (const id of legacySingleActors) {
   let dying = bossFixture(id, 'warning'); dying.boss.hp = 1; dying.boss.facingX = 1;
   dying = step(dying, 4, swing, swingAfter);
   assert.equal(dying.events.kill, 1); assert.equal(dying.orbs.length, 1);

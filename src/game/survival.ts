@@ -1,4 +1,5 @@
 import type { TutorialState } from './tutorialTypes';
+import { PLAGUE_BALANCE, advancePlagueFlight, createPlagueFlight, plagueCount, plagueHealth, plagueSpawnPoints, plagueVariant, type PlagueFlight, type PlagueEncounter } from './plague';
 import { playActionSound, stopActionSound, stopOwnerSounds, hasAuthoredAttackSound, type ActionSoundEvents } from './actionSounds';
 import { createRotation, peekRotation, consumeRotation, type Rotation } from './rotation';
 import { milestoneChestPosition } from './chestPlacement';
@@ -10,10 +11,10 @@ import { createRunStats, type RunStats } from './scores';
 import { OPTIONAL_EVENT_CONFIG, createOptionalEvents, clearOptionalEvents, optionalTuning, advanceEventPoint, type OptionalEvent } from './optionalEvents';
 import { hazardHits, projectilePathClear } from './bossHazards';
 import { FRENESIS, createFrenesis, startFrenesis, endFrenesis, advanceFrenesis, chargeFrenesis, stopFrenesisSpin, type FrenesisState } from './frenesis';
-import { BOSS_BALANCE, bossMode } from './bossBalance';
+import { BOSS_BALANCE, RANGED_PHASE_BALANCE, rangedPreparation, bossMode } from './bossBalance';
 import { dustBeepTick, dustJumpTimeline, dustPressure } from './dustJumper';
 import type { BossHazard } from './bossEffects';
-import { BANDIT_ENCOUNTER_NAME, createPurgatorio, nextPurgatorioEnemy, purgatorioTuning, PURGATORIO_CONFIG, type PurgatorioState, type RunSelection } from './purgatorio';
+import { BANDIT_ENCOUNTER_NAME, canonicalPurgatorioEnemy, isSpecialEnemy, createPurgatorio, nextPurgatorioEnemy, confirmPurgatorioAppearance, purgatorioTuning, PURGATORIO_CONFIG, type SpecialEnemyId, type PurgatorioState, type RunSelection } from './purgatorio';
 import { attackMotionRoot, banditExitRoot } from './enemyMotion';
 import { ENEMY_VISUALS } from './enemyAnimations';
 import { ADVANCED_EVENT_OVERLAP_WAVE, MISSION_EVENT_KINDS, type MissionKind, WORLD_EVENT_CONFIG, createWorldEvents, worldRandom, canStartOptional, canRunWorldEvent, advanceCapture, canStartSpecial, hasLivingSpecial, type WorldEvents, type ZoneReward } from './worldEvents';
@@ -42,6 +43,13 @@ export const SURVIVAL_CONFIG = {
 export type CommonKind = 'ghoul' | 'spitter' | 'summoner';
 type CommonNpc = Npc & { kind?: CommonKind };
 export type BossState = {
+  widowSummonCooldownMs?: number; widowLastSummonPattern?: number;
+  preparationMs?: number; sageBurstsLeft?: number; sageBurstIndex?: number;
+  archerShotsSinceTeleport?: number;
+  sageVelocityX?: number; sageVelocityY?: number;
+  sageBlastTargets?: { x: number; y: number }[];
+  plague?: PlagueFlight;
+  defeatConfirmed?: boolean;
   id: EnemyId; name: string; x: number; y: number; facingX: number;
   hp: number; maxHp: number; phase: 'intro' | 'warning' | 'attack' | 'recover' | 'death';
   phaseMs: number; pattern: number; animationMs: number; lastHitSerial: number; aimAngle: number;
@@ -76,6 +84,8 @@ export type BossPresentationState = { entityId: number; elapsedMs: number; durat
 export const END_SEQUENCE = { deathDelayMs: 2000, victoryDelayMs: 3000 };
 export type Ending = { kind: 'death' | 'victory'; elapsedMs: number; animationMs: number; ready: boolean };
 export type SurvivalState = {
+  plague?: PlagueEncounter;
+  identifiedDefeats?: SpecialEnemyId[];
   tutorial?: TutorialState;
   rotations?:{mini:Rotation<EnemyId>;boss:Rotation<EnemyId>};
   droidGroup?:{id:number;rewarded:boolean;killed:number[];x:number;y:number};
@@ -259,11 +269,16 @@ function dropOrb(state: SurvivalState, x: number, y: number, value: number): voi
     state.orbs[state.orbs.length - 1] = { ...last, value: last.value + value, lifeMs: SURVIVAL_CONFIG.orbLifetimeMs };
   }
 }
-function nearbyPosition(state: SurvivalState, center: { x: number; y: number }, player: PlayerState, field: FlowField, minRadius = 75, maxRadius = 210, safeDistance = 95): { x: number; y: number } | null {
+function insideCombatView(point: { x: number; y: number }, view: SurvivalState['combatView']): boolean {
+  'worklet';
+  return !view || point.x >= view.left + 35 && point.x <= view.right - 35 && point.y >= view.top + 75 && point.y <= view.bottom - 20;
+}
+function nearbyPosition(state: SurvivalState, center: { x: number; y: number }, player: PlayerState, field: FlowField, minRadius = 75, maxRadius = 210, safeDistance = 95, view?: SurvivalState['combatView']): { x: number; y: number } | null {
   'worklet';
   for (let i = 0; i < 48; i++) {
     const angle = worldRandom(state.world) * Math.PI * 2, r = minRadius + worldRandom(state.world) * (maxRadius - minRadius);
     const p = { x: center.x + Math.cos(angle) * r, y: center.y + Math.sin(angle) * r };
+    if (!insideCombatView(p, view)) continue;
     if (!spawnIsClear(p, player, state.encounter.enemies, field, { ...WAVE_CONFIG, spawnMinDistance: safeDistance, spawnMaxDistance: 5000 })) continue;
     if (BOSS_BLOCKERS.some(b => p.x - 22 < b.x + b.width && p.x + 22 > b.x && p.y - 65 < b.y + b.height && p.y + 8 > b.y)) continue;
     if ([...(state.boss ? [state.boss] : []), ...(state.partner ? [state.partner] : []), ...state.minibosses].some(b => b.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < 70)) continue;
@@ -311,6 +326,11 @@ function hurtPlayer(state: SurvivalState, amount = 1): boolean {
   state.armor=Math.max(0,(state.armor??0)-absorbed);
   state.hp = Math.max(state.tutorial ? 1 : 0, state.hp - (amount-absorbed)); state.events.damage++;
   state.invulnerableMs = SURVIVAL_CONFIG.invulnerableMs;
+  if (state.hp === 0 && state.plague) {
+    for (const fly of [state.boss, ...state.minibosses]) if (fly?.plague) stopOwnerSounds(state.events, fly.entityId!);
+    if (state.boss?.plague) state.boss = null;
+    state.minibosses = state.minibosses.filter(b => !b.plague); state.plague = undefined;
+  }
   if (state.hp === 0) { state.droidGroup=undefined;state.frenesis = endFrenesis(state.frenesis); state.mode = 'dead'; state.ending = { kind: 'death', elapsedMs: 0, animationMs: PLAYER_ANIMATIONS.death.frames * 1000 / PLAYER_ANIMATIONS.death.fps, ready: false }; state.presentation = null; state.projectiles = []; state.minibosses=state.minibosses.filter(m=>!m.cloneOf); state.events.death++; state.stunMs = 0; state.poisonMs = 0; state.hazards = []; if(state.world.optional){state.world.optional=clearOptionalEvents(state.world.optional);state.encounter.enemies=state.encounter.enemies.map(n=>n.eventOwner?emptyNpc():n);} }
   return true;
 }
@@ -381,12 +401,17 @@ function announceOptional(state:SurvivalState,event:OptionalEvent):void {
   'worklet';missionStarted(state,event.kind);state.world.optional.lastKind=event.kind;state.world.lastEventStartMs=state.clockMs;
   state.events.eventStart=(state.events.eventStart??0)+1;state.events.eventCue=event.kind==='elite'?0:event.kind==='nest'?1:2;
 }
+function specialHealthMultiplier(state: SurvivalState): number {
+  'worklet';
+  const growth = state.purgatorio ? purgatorioTuning(state.purgatorio.number, state.difficulty).hpMultiplier : 1 + Math.min(0.6, Math.floor((state.encounter.wave - 1) / 10) * 0.08);
+  return bossMode(state.difficulty).hp * growth;
+}
 function makeBoss(state: SurvivalState, id: EnemyId, position: { x: number; y: number }, player: PlayerState): BossState {
   'worklet';
   const spec = ENEMY_DEFS[id];
-  const growth = state.purgatorio ? purgatorioTuning(state.purgatorio.number, state.difficulty).hpMultiplier : 1 + Math.min(0.6, Math.floor((state.encounter.wave - 1) / 10) * 0.08);
-  const scaledHp = spec.tier === 'minion' ? 1 : id === 'bomb-droid' ? spec.hp : Math.ceil(spec.hp * bossMode(state.difficulty).hp * growth);
-  const hp = scaledHp * (id === 'rock-boss' ? BOSS_BALANCE.rockHealthMultiplier : id === 'skeleton-summoner' ? BOSS_BALANCE.summonerHealthMultiplier : 1);
+  const scaledHp = spec.tier === 'minion' ? 1 : id === 'bomb-droid' ? spec.hp : Math.ceil(spec.hp * specialHealthMultiplier(state));
+  const hp = scaledHp * (id === 'rock-boss' ? BOSS_BALANCE.rockHealthMultiplier : id === 'skeleton-summoner' ? BOSS_BALANCE.summonerHealthMultiplier : 1)
+    * (state.difficulty === 'easy' && BOSS_BALANCE.easyReducedHealthIds.includes(id) ? BOSS_BALANCE.easyHealthMultiplier : 1);
   return { ...position, id, name: spec.name, entityId: state.nextPickupId++,
     facingX: player.x < position.x ? -1 : 1, hp, maxHp: hp,
     phase: 'intro', phaseMs: 0, animationMs: 0, pattern: 0, powerPhase: 0, damage: 1, teleportCooldownMs: BOSS_BALANCE.teleportCooldownMs, lastHitSerial: -1, aimAngle: 0, attackRootX: 0 };
@@ -445,9 +470,23 @@ function spawnBossSupport(state: SurvivalState, owner: BossState, player: Player
 function beginSpecial(state: SurvivalState, id: EnemyId, position: { x: number; y: number }, player: PlayerState, origin: 'scheduled' | 'ship' | 'purgatorio', field: FlowField): boolean {
   'worklet';
   if (ENEMY_DEFS[id].tier === 'minion' || !canStartSpecial(state, origin)) return false;
+  // Preflight the complete swarm before taking the exclusive special slot.
+  const swarmPoints = id === 'the-plague' ? plagueSpawnPoints(plagueCount(state.purgatorio?.number ?? state.encounter.wave, state.difficulty), player, field, state.combatView, state.encounter.randomSeed) : [];
+  if (id === 'the-plague' && swarmPoints.length < plagueCount(state.purgatorio?.number ?? state.encounter.wave, state.difficulty)) return false;
   state.boss = { ...makeBoss(state, id, position, player), origin };
   if(state.world.optional){state.world.optional.notice=null;state.world.optional.visibility=0;}
   state.partner = null; state.encounterName = undefined; state.encounterMaxHp = undefined;
+  if (id === 'the-plague') {
+    const largeMultiplier = specialHealthMultiplier(state);
+    const members = swarmPoints.map((spot, index): BossState => {
+      const variant = plagueVariant(index), hp = plagueHealth(variant, largeMultiplier);
+      return { ...makeBoss(state, id, spot, player), hp, maxHp: hp, origin,
+        plague: createPlagueFlight(variant, spot, state.encounter.randomSeed, index), animationMs: index * 137 };
+    });
+    state.boss = members[0]; state.minibosses = members.slice(1);
+    state.encounterName = 'THE PLAGUE'; state.encounterMaxHp = members.reduce((sum, b) => sum + b.maxHp, 0);
+    state.plague = { id: state.boss.entityId!, memberIds: members.map(b => b.entityId!), killed: [], maxHp: state.encounterMaxHp, rewarded: false };
+  }
   if (id === 'dagger-bandit' || id === 'archer-bandit') {
     const other = id === 'dagger-bandit' ? 'archer-bandit' : 'dagger-bandit';
     const spot = nearbyPosition(state, position, player, field, 150, 260);
@@ -466,6 +505,7 @@ function beginSpecial(state: SurvivalState, id: EnemyId, position: { x: number; 
     state.presentation = { entityId: state.boss.entityId!, elapsedMs: 0, durationMs: WAVE_BALANCE.presentationMs };
   } else { state.events.boss++; state.world.ship = null; state.world.lastEventStartMs = state.clockMs; }
   if(origin!=='purgatorio')commitSpecialRotation(state,id);
+  else if (state.purgatorio && isSpecialEnemy(id)) confirmPurgatorioAppearance(state.purgatorio, id);
   return true;
 }
 function chooseZoneReward(state: SurvivalState, sheet: string): ZoneReward {
@@ -687,14 +727,19 @@ function attackPathClear(boss: BossState, player: PlayerState): boolean {
   return true;
 }
 
-function burstNpcs(state: SurvivalState, center: { x: number; y: number }, player: PlayerState, field: FlowField, count: number): number {
+function burstNpcs(state: SurvivalState, center: { x: number; y: number }, player: PlayerState, field: FlowField, count: number, widowOwner?: number): number {
   'worklet';
   const alive = state.encounter.enemies.filter(n => n.active && n.action !== 'death').length;
-  const wanted = Math.min(count, Math.max(0, commonNpcLimit(state) - alive));
+  const owned = widowOwner === undefined ? 0 : state.encounter.enemies.filter(n => n.active && n.action !== 'death' && n.summonOwner === widowOwner).length;
+  const wanted = Math.min(count, Math.max(0, commonNpcLimit(state) - alive), widowOwner === undefined ? count : Math.max(0, BOSS_BALANCE.widowSummonLimit[state.difficulty] - owned));
   let spawned = 0;
   for (let i = 0; i < wanted * 3 && spawned < wanted && state.encounter.enemies.some(n => !n.active); i++) {
     const p = nearbyPosition(state, center, player, field, 75, 230, 100);
-    if (p && spawnCommon(state, player, field, p)) spawned++;
+    const slot = state.encounter.enemies.findIndex(n => !n.active);
+    if (p && spawnCommon(state, player, field, p)) {
+      if (widowOwner !== undefined && slot >= 0) state.encounter.enemies[slot] = { ...state.encounter.enemies[slot], summonOwner: widowOwner };
+      spawned++;
+    }
   }
   return spawned;
 }
@@ -735,7 +780,10 @@ function advanceHazards(state: SurvivalState, player: PlayerState, field: FlowFi
       const x = player.x + (h.followOffsetX ?? 0), y = player.y + (h.followOffsetY ?? 0);
       if (isWalkable(x, y)) { h.x = x; h.y = y; }
     }
-    if (h.kind === 'beam') { h.x = owner.x + Math.cos(h.angle) * 28; h.y = owner.y - 26 + Math.sin(h.angle) * 28; }
+    if (h.kind === 'beam') {
+      h.x = owner.x + Math.cos(h.angle) * 28; h.y = owner.y - 26 + Math.sin(h.angle) * 28;
+      if (h.travelSpeed) h.length = Math.min(h.maxLength ?? BOSS_BALANCE.beamLength, h.travelSpeed * Math.max(0, h.ageMs - h.warningMs) / 1000);
+    }
     // Sound follows the visible projectile release, not the later collision.
     if (h.launchMs !== undefined && old.ageMs < h.launchMs && h.ageMs >= h.launchMs) {
       if (h.fx === 'electroLightning') playActionSound(state.events,'electroProjectile',h.owner);
@@ -748,7 +796,7 @@ function advanceHazards(state: SurvivalState, player: PlayerState, field: FlowFi
     }
     if (!active) { live.push(h); continue; }
     if (h.npcBurst && !h.emitted) {
-      burstNpcs(state, h, player, field, h.npcBurst); h.emitted = true;
+      burstNpcs(state, h, player, field, h.npcBurst, owner.id === 'tarnished-widow' ? owner.entityId : undefined); h.emitted = true;
       if (h.fx === 'shockSlam') state.npcBoostMs = BOSS_BALANCE.npcBoostMs;
     }
     const movingMs = Math.max(0, Math.min(dt, h.ageMs - h.warningMs));
@@ -771,12 +819,13 @@ function advanceHazards(state: SurvivalState, player: PlayerState, field: FlowFi
   }
   state.hazards = live;
 }
-function moveBossAway(boss: BossState, player: PlayerState, step: number): BossState {
+function moveBossAway(boss: BossState, player: PlayerState, step: number, view?: SurvivalState['combatView']): BossState {
   'worklet';
   const angle = Math.atan2(boss.y - player.y, boss.x - player.x);
   let best = boss, score = -Infinity;
   for (const turn of [0, 0.55, -0.55, 1.1, -1.1, 1.57, -1.57, 2.2, -2.2, Math.PI]) {
     const p = moveWithCollisions(boss, Math.cos(angle + turn) * step, Math.sin(angle + turn) * step);
+    if (!insideCombatView(p, view)) continue;
     const travelled = Math.hypot(p.x - boss.x, p.y - boss.y);
     const candidate = travelled * 3 + Math.hypot(p.x - player.x, p.y - player.y) - Math.abs(turn) * 0.4;
     if (candidate > score) { best = { ...boss, ...p }; score = candidate; }
@@ -810,7 +859,7 @@ function sweepCorridor(state: SurvivalState, boss: BossState): { x: number; y: n
 function prepareBossHazards(state: SurvivalState, boss: BossState, player: PlayerState, field: FlowField): void {
   'worklet';
   const move = bossAttack(boss.id, boss.attackIndex ?? 0), rate = boss.attackRate ?? 1;
-  const preparation = Math.max(BOSS_BALANCE.warningMinMs, move.warningMs / rate);
+  const preparation = boss.preparationMs ?? rangedPreparation(boss.id, Boolean(boss.powerPhase), move, rate);
   if (boss.id === 'evil-sage') playActionSound(state.events,'sageCharge',boss.entityId!);
   const launchMs = move.kind === 'volley' ? preparation + move.durationMs * BOSS_BALANCE.volleyReleaseFraction / rate : undefined;
   const bombMarkerMs = boss.id === 'dust-jumper' && move.kind === 'projectile'
@@ -839,7 +888,7 @@ function prepareBossHazards(state: SurvivalState, boss: BossState, player: Playe
     addHazard(state, boss, { ...base, x: target.x, y: target.y, kind: 'teleport', radius: 38,
       followMs: Math.max(0, wait - BOSS_BALANCE.burrowLockMs), damage: 0, fx: 'teleport' });
   } else if (move.kind === 'teleport') {
-    const spot = nearbyPosition(state, player, player, field, BOSS_BALANCE.teleportSafeDistance, 310, BOSS_BALANCE.teleportSafeDistance);
+    const spot = nearbyPosition(state, player, player, field, BOSS_BALANCE.teleportSafeDistance, 310, BOSS_BALANCE.teleportSafeDistance, boss.id === 'archer' ? state.combatView : undefined);
     boss.targetX = spot?.x ?? boss.x; boss.targetY = spot?.y ?? boss.y;
     addHazard(state, boss, { ...base, x: boss.targetX, y: boss.targetY, kind: 'teleport', radius: 38, warningMs: wait, damage: 0, fx: 'teleport' });
   } else if (move.kind === 'laser') {
@@ -850,6 +899,8 @@ function prepareBossHazards(state: SurvivalState, boss: BossState, player: Playe
     }
     addHazard(state, boss, { ...base, kind: 'beam', x: boss.x + Math.cos(boss.aimAngle) * 28, y: boss.y - 26 + Math.sin(boss.aimAngle) * 28, angle: boss.aimAngle,
       radius: move.halfWidth, length: BOSS_BALANCE.beamLength, activeMs: (move.activeEndMs - move.activeStartMs) / rate,
+      ...(boss.id === 'archer' ? { length: 0, maxLength: BOSS_BALANCE.beamLength,
+        travelSpeed: RANGED_PHASE_BALANCE.archer.beamSpeed * (boss.powerPhase ? RANGED_PHASE_BALANCE.archer[state.difficulty].projectileSpeed : 1) } : {}),
       fx: boss.id === 'rock-boss' ? 'rockBeam' : 'archerBeam' });
   } else if (move.kind === 'projectile' && boss.id !== 'dust-jumper') {
     const count = boss.id === 'shielder' ? bossMode(state.difficulty).balls : boss.siblingRage ? 3 : 1;
@@ -875,14 +926,39 @@ function prepareBossHazards(state: SurvivalState, boss: BossState, player: Playe
   } else if (move.kind === 'explosion' || move.kind === 'jump' || move.kind === 'slam') {
     const self = boss.id === 'evil-sage' && (boss.attackIndex ?? 0) === 0 || move.kind === 'slam';
     const widow = boss.id === 'tarnished-widow';
-    const p = self || jump ? { x: boss.x, y: boss.y } : target;
+    const widowSummons = widow && (boss.widowSummonCooldownMs ?? 0) <= 0 && boss.widowLastSummonPattern !== boss.pattern - 1;
+    if (widowSummons) { boss.widowSummonCooldownMs = BOSS_BALANCE.widowSummonCooldownMs / rate; boss.widowLastSummonPattern = boss.pattern; }
+    let p = self || jump ? { x: boss.x, y: boss.y } : target;
+    if (boss.id === 'evil-sage' && boss.powerPhase && !self) {
+      const index = boss.sageBurstIndex ?? 0, config = RANGED_PHASE_BALANCE.sage;
+      const prediction = index * config.predictionMs / 1000;
+      const predicted = { x: target.x + Math.max(-config.maxPrediction, Math.min(config.maxPrediction, (boss.sageVelocityX ?? 0) * prediction)),
+        y: target.y + Math.max(-config.maxPrediction, Math.min(config.maxPrediction, (boss.sageVelocityY ?? 0) * prediction)) };
+      let chosen: { x: number; y: number } | null = null;
+      const offset = config.blastOffset, wide = config.blastWideOffset, diagonal = offset * .707;
+      const offsets = index ? [[0, 0], [0, offset], [0, -offset], [0, wide], [0, -wide], [offset, 0], [-offset, 0],
+        [diagonal, diagonal], [-diagonal, -diagonal], [diagonal, -diagonal], [-diagonal, diagonal]] : [[0, 0]];
+      for (const shift of offsets) {
+        const v = state.combatView;
+        const rawX = predicted.x + Math.cos(boss.aimAngle) * shift[0] + Math.cos(boss.aimAngle + Math.PI / 2) * shift[1];
+        const rawY = predicted.y + Math.sin(boss.aimAngle) * shift[0] + Math.sin(boss.aimAngle + Math.PI / 2) * shift[1];
+        const candidate = { x: v ? Math.max(v.left + 35, Math.min(v.right - 35, rawX)) : rawX,
+          y: v ? Math.max(v.top + 75, Math.min(v.bottom - 20, rawY)) : rawY };
+        if (!isWalkable(candidate.x, candidate.y) || !insideCombatView(candidate, state.combatView)) continue;
+        if (index && (boss.sageBlastTargets ?? []).some(previous => Math.hypot(candidate.x - previous.x, candidate.y - previous.y) < config.blastSpacing)) continue;
+        chosen = candidate; break;
+      }
+      if (!chosen) { boss.sageBurstsLeft = 0; return; }
+      p = chosen;
+      boss.sageBlastTargets = [...(boss.sageBlastTargets ?? []), chosen];
+    }
     addHazard(state, boss, { ...base, ...p, kind: widow ? 'poisonBlast' : move.kind === 'slam' || move.kind === 'jump' ? 'slam' : 'blast',
       markerStartMs: jump ? preparation + jump.takeoffMs : undefined,
       landingStartMs: jump ? preparation + jump.landingStartMs : undefined,
-      followMs: jump ? preparation + jump.followEndMs : !self ? 400 : undefined, activeMs: 700,
+      followMs: jump ? preparation + jump.followEndMs : !self && !(boss.id === 'evil-sage' && boss.powerPhase) ? 400 : undefined, activeMs: 700,
       fx: boss.id === 'evil-sage' ? self ? 'sageDark' : 'sageCyan' : boss.id === 'shock-sweeper' ? 'shockSlam' : widow ? 'widowPoison' : 'dustSlam',
       stunMs: boss.id === 'shock-sweeper' ? BOSS_BALANCE.stunMs : undefined,
-      poison: widow, npcBurst: widow ? 10 : boss.id === 'shock-sweeper' ? 10 + bossMode(state.difficulty).burstExtra : undefined });
+      poison: widow, npcBurst: widow ? widowSummons ? 10 : undefined : boss.id === 'shock-sweeper' ? 10 + bossMode(state.difficulty).burstExtra : undefined });
   }
 }
 
@@ -916,10 +992,11 @@ function advanceElectroClones(state:SurvivalState,boss:BossState,player:PlayerSt
   state.minibosses.push({...makeBoss(state,'electrocutioner',p,player),hp:1,maxHp:1,cloneOf:boss.entityId,cloneMs:0,powerPhase:0,pattern:0});
 }
 
-function advanceBoss(state: SurvivalState, source: BossState, before: PlayerState, player: PlayerState, field: FlowField, dt: number): BossState | null {
+function advanceBoss(state: SurvivalState, source: BossState, before: PlayerState, player: PlayerState, field: FlowField, dt: number, plaguePeers?: readonly (BossState | null)[]): BossState | null {
   'worklet';
   const spec = ENEMY_DEFS[source.id], tuning = state.purgatorio ? purgatorioTuning(state.purgatorio.number, state.difficulty) : difficultyTuning(state.encounter.wave, state.difficulty);
   let boss: BossState = { ...source, hitFlashMs: Math.max(0,(source.hitFlashMs??0)-dt), attackRootX: source.phase === 'attack' ? (source.attackRootX ?? 0) : 0,
+    widowSummonCooldownMs: source.id === 'tarnished-widow' ? Math.max(0, (source.widowSummonCooldownMs ?? 0) - dt) : source.widowSummonCooldownMs,
     phaseMs: source.phaseMs + dt, animationMs: source.animationMs + dt, summonMs: (source.summonMs ?? 0) + dt,
     shockSummonCooldownMs: source.id === 'shock-sweeper' ? Math.max(0, (source.shockSummonCooldownMs ?? 0) - dt) : source.shockSummonCooldownMs,
     teleportCooldownMs: Math.max(0, (source.teleportCooldownMs ?? BOSS_BALANCE.teleportCooldownMs) - dt) };
@@ -943,7 +1020,13 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
     if (boss.hp <= 0) {
       stopOwnerSounds(state.events,boss.entityId!);
       state.events.kill++;
-      if(!boss.cloneOf){
+      if (boss.plague && state.plague) {
+        const group = state.plague;
+        if (!group.killed.includes(boss.entityId!)) {
+          state.plague = { ...group, killed: [...group.killed, boss.entityId!] };
+          dropOrb(state, boss.x, boss.y, PLAGUE_BALANCE.orb[boss.plague.variant]);
+        }
+      } else if(!boss.cloneOf){
         if (spec.tier !== 'minion') state.events.boss++;
         if (spec.tier === 'boss') state.stats.bossKills++;
         else if (spec.tier === 'mini') state.stats.minibossKills++;
@@ -953,10 +1036,29 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
         else if(spec.tier!=='minion')enqueueChest(state,boss.x,boss.y);
       }
       state.hazards = state.hazards.filter(h => h.owner !== boss.entityId);
-      return { ...boss, hp: 0, phase: 'death', phaseMs: 0, animationMs: 0, attackRootX: 0, packRemaining: boss.id === 'bomb-droid' ? boss.packRemaining : 0 };
+      return { ...boss, defeatConfirmed: !boss.cloneOf && spec.tier !== 'minion', hp: 0, phase: 'death', phaseMs: 0, animationMs: 0, attackRootX: 0, packRemaining: boss.id === 'bomb-droid' ? boss.packRemaining : 0 };
     }
   }
+  if (boss.plague) {
+    const previousStage = boss.plague.stage;
+    const flight = advancePlagueFlight(state, boss, before, player, field, dt, plaguePeers);
+    if (previousStage !== 'windup' && flight.boss.plague!.stage === 'windup') {
+      state.events.bossAttack++; state.events.bossAttackSound = (state.events.bossAttackSound ?? 0) + 1;
+    }
+    if (flight.sting && player.action !== 'dash' && attackPathClear(flight.boss, player)) hurtPlayer(state);
+    return state.hp === 0 ? null : flight.boss;
+  }
   const ratio = boss.hp / boss.maxHp;
+  if (boss.id === 'evil-sage' || boss.id === 'archer') {
+    const previousPhase = boss.powerPhase ?? 0;
+    phaseSignal(state, boss, boss.hp * 2 <= boss.maxHp ? 1 : 0);
+    if (boss.id === 'archer' && previousPhase === 0 && boss.powerPhase) boss.teleportCooldownMs = Math.min(boss.teleportCooldownMs!, RANGED_PHASE_BALANCE.archer[state.difficulty].teleportMs);
+    if (boss.id === 'evil-sage') {
+      const smoothing = Math.min(1, dt / 120);
+      boss.sageVelocityX = (source.sageVelocityX ?? 0) + ((player.x - before.x) * 1000 / dt - (source.sageVelocityX ?? 0)) * smoothing;
+      boss.sageVelocityY = (source.sageVelocityY ?? 0) + ((player.y - before.y) * 1000 / dt - (source.sageVelocityY ?? 0)) * smoothing;
+    }
+  }
   if(boss.id==='electrocutioner'&&!boss.cloneOf){
     const oldPhase=boss.powerPhase??0;
     // Integer comparisons include the exact thresholds, independently of FPS.
@@ -964,7 +1066,7 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
     advanceElectroClones(state,boss,player,field,dt,oldPhase<2&&(boss.powerPhase??0)>=2);
   }else if (boss.id === 'guardian') phaseSignal(state, boss, ratio < 1 / 3 ? 2 : ratio < 2 / 3 ? 1 : 0);
   else if (boss.id === 'dust-jumper') phaseSignal(state, boss, ratio < 2 / 3 ? 1 : 0);
-  else if (boss.id === 'skeleton-summoner' || boss.id === 'rock-boss' || boss.id === 'archer') phaseSignal(state, boss, ratio < 0.5 ? 1 : 0);
+  else if (boss.id === 'skeleton-summoner' || boss.id === 'rock-boss') phaseSignal(state, boss, ratio < 0.5 ? 1 : 0);
   const sibling = state.partner ? (boss.entityId === state.partner.entityId ? state.boss : state.partner) : null;
   if ((boss.id === 'dagger-bandit' || boss.id === 'archer-bandit') && sibling && sibling.hp <= 0 && !boss.siblingRage) {
     boss.siblingRage = true; boss.damage = 2; boss.hp = Math.min(boss.maxHp, boss.hp + Math.ceil(boss.maxHp * BOSS_BALANCE.siblingHeal)); phaseSignal(state, boss, 1);
@@ -972,6 +1074,8 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
   const minionBoost = spec.tier === 'minion' && state.boss?.id === 'skeleton-summoner' && (state.boss.powerPhase ?? 0) > 0;
   const powerSpeed = boss.id === 'guardian' && boss.powerPhase ? 1.85 : boss.id === 'rock-boss' && boss.powerPhase ? 1.8
     : boss.id === 'skeleton-summoner' && boss.powerPhase || minionBoost ? 1.6 : boss.siblingRage ? 1.55
+    : boss.id === 'evil-sage' && boss.powerPhase ? RANGED_PHASE_BALANCE.sage[state.difficulty].speed
+    : boss.id === 'archer' && boss.powerPhase ? RANGED_PHASE_BALANCE.archer[state.difficulty].speed
     : boss.id==='electrocutioner'&&boss.powerPhase?BOSS_BALANCE.electroSpeedMultiplier:boss.id === 'dust-jumper' ? dustPressure(boss.hp, boss.maxHp).movement : 1;
   const speed = spec.speed * tuning.speed * powerSpeed * (boss.id === 'bomb-droid' ? 1.6 : 1);
   if (spec.tier === 'boss' && !boss.cloneOf && boss.id !== 'skeleton-summoner' && boss.summonMs! >= tuning.summonMs && boss.phase === 'recover') {
@@ -998,7 +1102,15 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
   if (boss.phase === 'intro' && boss.phaseMs >= SURVIVAL_CONFIG.introMs) boss = { ...boss, phase: 'recover', phaseMs: 0, animationMs: 0 };
   else if (boss.phase === 'recover') {
     const ranged = boss.id === 'evil-sage' || boss.id === 'archer' || boss.id === 'archer-bandit' || boss.id === 'dust-jumper'||boss.id==='electrocutioner';
-    if (ranged && distance < 220 || boss.id === 'rock-boss' && boss.pattern % 4 === 2 && distance < 180) boss = moveBossAway(boss, player, speed * dt / 1000);
+    const constrainedRanged = boss.id === 'evil-sage' || boss.id === 'archer';
+    if (constrainedRanged && !insideCombatView(boss, state.combatView)) {
+      const v = state.combatView!;
+      const target = { x: Math.max(v.left + 40, Math.min(v.right - 40, boss.x)), y: Math.max(v.top + 80, Math.min(v.bottom - 25, boss.y)) };
+      const length = Math.hypot(target.x - boss.x, target.y - boss.y), travel = Math.min(length, speed * dt / 1000);
+      const next = length > 0 ? moveWithCollisions(boss, (target.x - boss.x) / length * travel, (target.y - boss.y) / length * travel) : boss;
+      if (Math.hypot(next.x - boss.x, next.y - boss.y) > .1) boss = { ...boss, ...next };
+      else { const direction = navigationDirection(boss, player, field); boss = { ...boss, ...moveWithCollisions(boss, direction.x * speed * dt / 1000, direction.y * speed * dt / 1000) }; }
+    } else if (ranged && distance < 220 || boss.id === 'rock-boss' && boss.pattern % 4 === 2 && distance < 180) boss = moveBossAway(boss, player, speed * (boss.id === 'evil-sage' && boss.powerPhase ? RANGED_PHASE_BALANCE.sage[state.difficulty].retreat : 1) * dt / 1000, constrainedRanged ? state.combatView : undefined);
     else if (distance > (ranged ? 310 : 45)) {
       const direction = navigationDirection(boss, player, field);
       boss = { ...boss, ...moveWithCollisions(boss, direction.x * speed * dt / 1000, direction.y * speed * dt / 1000) };
@@ -1029,7 +1141,9 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
     const summonInterval = Math.max(2400, tuning.summonMs * 0.34);
     const summonDue = boss.id === 'skeleton-summoner' && boss.summonMs! >= summonInterval;
     const rangedReady = ranged && distance < 850 || boss.id === 'rock-boss' && distance < 1000;
-    if (!stagingSweep && (summonDue || rangedReady || distance < spec.attackRange + 90) && boss.phaseMs >= Math.max(WAVE_BALANCE.minRecoveryMs, move.recoveryMs / rate) && state.clockMs >= state.bossActionUntilMs) {
+    const recoveryScale = boss.id === 'archer' && boss.powerPhase ? RANGED_PHASE_BALANCE.archer[state.difficulty].recovery : 1;
+    const minRecovery = boss.id === 'archer' && boss.powerPhase ? RANGED_PHASE_BALANCE.archer.minRecoveryMs : WAVE_BALANCE.minRecoveryMs;
+    if (!stagingSweep && (!constrainedRanged || insideCombatView(boss, state.combatView)) && (summonDue || rangedReady || distance < spec.attackRange + 90) && boss.phaseMs >= Math.max(minRecovery, move.recoveryMs / rate * recoveryScale) && state.clockMs >= state.bossActionUntilMs) {
       let index = boss.pattern % bossAttackCount(boss.id);
       if (boss.id === 'shock-sweeper') {
         const slamTurn = boss.pattern % (BOSS_BALANCE.shockMeleePerSlam + 1) === 1;
@@ -1038,17 +1152,24 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
       if (boss.id === 'skeleton-summoner') index = summonDue ? 1 : 0;
       if (boss.id === 'guardian' && ((boss.powerPhase ?? 0) < 2 || boss.teleportCooldownMs! > 0) && index === 3) index = 0;
       if (boss.id === 'dust-jumper' && !boss.powerPhase) index = 0;
-      if (boss.id === 'archer') index = boss.powerPhase && boss.teleportCooldownMs === 0 && boss.pattern % 3 === 2 ? 1 : 0;
+      if (boss.id === 'archer') index = boss.powerPhase && boss.teleportCooldownMs === 0
+        && (boss.archerShotsSinceTeleport ?? RANGED_PHASE_BALANCE.archer.minShotsBetweenTeleports) >= RANGED_PHASE_BALANCE.archer.minShotsBetweenTeleports ? 1 : 0;
       if (boss.id === 'guardian' && (boss.powerPhase ?? 0) >= 2 && boss.teleportCooldownMs === 0) index = 3;
       if(boss.id==='electrocutioner')index=boss.cloneOf?0:boss.powerPhase&&boss.teleportCooldownMs===0&&boss.pattern%3===2?2:boss.pattern%2;
       // Dagger Mush mixes one, two, and return strikes using seeded encounter RNG.
       if (boss.id === 'dagger-mush') index = Math.floor(worldRandom(state.world) * 3);
-      const next = bossAttack(boss.id, index), nextRate = tuning.combatRate * (boss.id === 'dust-jumper' ? dustPressure(boss.hp, boss.maxHp).tempo : 1);
+      const next = bossAttack(boss.id, index), nextRate = boss.id === 'archer' && boss.powerPhase
+        ? Math.min(RANGED_PHASE_BALANCE.archer.maxAttackRate, tuning.combatRate * RANGED_PHASE_BALANCE.archer[state.difficulty].attackRate)
+        : tuning.combatRate * (boss.id === 'dust-jumper' ? dustPressure(boss.hp, boss.maxHp).tempo : 1);
       boss = { ...boss, phase: 'warning', phaseMs: 0, animationMs: 0, attackRootX: 0, attackIndex: index, attackRate: nextRate, summonDone: false, dustCritical: boss.id==='dust-jumper'&&boss.hp*3<boss.maxHp,
         aimAngle: Math.atan2(player.y - boss.y, player.x - boss.x) };
+      boss.preparationMs = rangedPreparation(boss.id, Boolean(boss.powerPhase), next, nextRate);
+      if (boss.id === 'evil-sage') {
+        boss.sageBurstIndex = 0; boss.sageBlastTargets = []; boss.sageBurstsLeft = boss.powerPhase && index === 1 ? RANGED_PHASE_BALANCE.sage[state.difficulty].explosions - 1 : 0;
+      }
       if (boss.id === 'shock-sweeper' && index === 1) boss.shockSummonCooldownMs = BOSS_BALANCE.shockSummonCooldownMs;
       prepareBossHazards(state, boss, player, field);
-      const preparation = Math.max(BOSS_BALANCE.warningMinMs, next.warningMs / nextRate);
+      const preparation = boss.preparationMs;
       const duration = boss.id === 'dust-jumper' ? next.kind === 'jump' ? dustJumpTimeline(nextRate,boss.dustCritical).durationMs
         : next.durationMs / nextRate + BOSS_BALANCE.dustBombMarkerMs + 650 : next.durationMs / nextRate;
       state.bossActionUntilMs = state.clockMs + preparation + duration + WAVE_BALANCE.attackGapMs;
@@ -1056,7 +1177,7 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
   } else if (boss.phase === 'warning') {
     const tracking = state.hazards.find(h => h.owner === boss.entityId && h.followMs && h.ageMs < h.warningMs);
     if (tracking) { boss.targetX = tracking.x; boss.targetY = tracking.y; }
-    if (boss.phaseMs >= Math.max(BOSS_BALANCE.warningMinMs, move.warningMs / rate)) {
+    if (boss.phaseMs >= (boss.preparationMs ?? rangedPreparation(boss.id, Boolean(boss.powerPhase), move, rate))) {
       if (boss.id === 'dust-jumper') {
         // The warning can end between display frames. Start Dust's authored
         // timeline and its ground effects on exactly the same simulation frame.
@@ -1064,6 +1185,7 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
         state.hazards = state.hazards.map(h => h.owner === boss.entityId ? { ...h, ageMs: preparation - dt } : h);
       }
       boss = { ...boss, phase: 'attack', phaseMs: 0, animationMs: 0, attackRootX: 0, startX: boss.x, startY: boss.y };
+      if (boss.id === 'archer' && move.kind === 'laser') boss.archerShotsSinceTeleport = (boss.archerShotsSinceTeleport ?? 0) + 1;
       state.events.bossAttack++;
       // This recording includes the throw, descent and explosion. Play it once
       // with the throwing animation, never restart it at each ground impact.
@@ -1098,10 +1220,20 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
         if (exit) { boss.targetX = exit.x; boss.targetY = exit.y; }
       }
       if (ms >= first && !boss.moveDone) {
-        if (boss.targetX !== undefined && boss.targetY !== undefined && isWalkable(boss.targetX, boss.targetY) && (move.kind === 'burrow' || Math.hypot(player.x - boss.targetX, player.y - boss.targetY) >= BOSS_BALANCE.teleportSafeDistance)) {
+        if (boss.id === 'archer' && (boss.targetX === undefined || boss.targetY === undefined
+          || !insideCombatView({ x: boss.targetX, y: boss.targetY }, state.combatView)
+          || !isWalkable(boss.targetX, boss.targetY) || Math.hypot(player.x - boss.targetX, player.y - boss.targetY) < BOSS_BALANCE.teleportSafeDistance)) {
+          // A moving camera/player can invalidate the prepared destination.
+          // Recheck while the vanish clip is empty, before drawing the arrival.
+          const spot = nearbyPosition(state, player, player, field, BOSS_BALANCE.teleportSafeDistance, 310, BOSS_BALANCE.teleportSafeDistance, state.combatView);
+          boss.targetX = spot?.x; boss.targetY = spot?.y;
+          if (spot) state.hazards = state.hazards.map(h => h.owner === boss.entityId && h.kind === 'teleport' ? { ...h, ...spot } : h);
+        }
+        if (boss.targetX !== undefined && boss.targetY !== undefined && isWalkable(boss.targetX, boss.targetY) && (boss.id !== 'archer' || insideCombatView({ x: boss.targetX, y: boss.targetY }, state.combatView)) && (move.kind === 'burrow' || Math.hypot(player.x - boss.targetX, player.y - boss.targetY) >= BOSS_BALANCE.teleportSafeDistance)) {
           boss.x = boss.targetX; boss.y = boss.targetY;
         }
-        boss.moveDone = true; boss.teleportCooldownMs = boss.id==='electrocutioner'?BOSS_BALANCE.electroTeleportCooldownMs:BOSS_BALANCE.teleportCooldownMs;
+        boss.moveDone = true; boss.teleportCooldownMs = boss.id === 'archer' && boss.powerPhase ? RANGED_PHASE_BALANCE.archer[state.difficulty].teleportMs : boss.id==='electrocutioner'?BOSS_BALANCE.electroTeleportCooldownMs:BOSS_BALANCE.teleportCooldownMs;
+        if (boss.id === 'archer') boss.archerShotsSinceTeleport = 0;
       }
       // Commit after relocation, including a fast frame crossing the exit boundary.
       if (move.kind === 'burrow' && boss.moveDone && exitRootDelta) boss = { ...boss, ...moveWithCollisions(boss, exitRootDelta, 0) };
@@ -1168,7 +1300,16 @@ function advanceBoss(state: SurvivalState, source: BossState, before: PlayerStat
     }
     if (boss.id === 'dust-jumper' && move.kind === 'jump' ? boss.phaseMs >= dustJumpTimeline(rate,boss.dustCritical).durationMs : ms >= move.durationMs) {
       const nextPattern = boss.pattern + 1;
-      if (boss.id === 'dagger-mush' && (boss.comboLeft ?? 0) > 0) {
+      if (boss.id === 'evil-sage' && (boss.sageBurstsLeft ?? 0) > 0) {
+        boss.sageBurstsLeft!--; boss.sageBurstIndex = (boss.sageBurstIndex ?? 0) + 1;
+        boss.phase = 'warning'; boss.phaseMs = -RANGED_PHASE_BALANCE.sage.recoveryBetweenMs; boss.animationMs = 0;
+        boss.preparationMs = rangedPreparation(boss.id, true, move, rate);
+        boss.aimAngle = Math.atan2(player.y - boss.y, player.x - boss.x);
+        prepareBossHazards(state, boss, player, field);
+        // The breathing gap belongs to this next warning, not a detached timer.
+        for (const h of state.hazards) if (h.owner === boss.entityId && h.ageMs === 0) h.ageMs = -RANGED_PHASE_BALANCE.sage.recoveryBetweenMs;
+        state.bossActionUntilMs = state.clockMs + RANGED_PHASE_BALANCE.sage.recoveryBetweenMs + boss.preparationMs + move.durationMs / rate + WAVE_BALANCE.attackGapMs;
+      } else if (boss.id === 'dagger-mush' && (boss.comboLeft ?? 0) > 0) {
         boss.comboLeft!--; state.bossActionUntilMs = state.clockMs + Math.max(BOSS_BALANCE.warningMinMs, move.warningMs / rate) + move.durationMs / rate + WAVE_BALANCE.attackGapMs; boss.phase = 'warning'; boss.phaseMs = 0; boss.animationMs = 0;
         boss.aimAngle = boss.attackIndex === 2 ? boss.aimAngle + Math.PI : Math.atan2(player.y - boss.y, player.x - boss.x);
         if (Math.abs(Math.cos(boss.aimAngle)) > 0.1) boss.facingX = Math.sign(Math.cos(boss.aimAngle));
@@ -1247,6 +1388,7 @@ export function advanceSurvival(current: SurvivalState, before: PlayerState, pla
     return { ...current, presentation: finished ? null : { ...intro, elapsedMs: elapsed },
       boss: { ...current.boss, phase: finished ? 'recover' : 'intro', phaseMs: finished ? 0 : Math.min(SURVIVAL_CONFIG.introMs, elapsed), animationMs: elapsed },
       partner: current.partner ? { ...current.partner, phase: finished ? 'recover' : 'intro', phaseMs: finished ? 0 : Math.min(SURVIVAL_CONFIG.introMs, elapsed), animationMs: elapsed } : null,
+      minibosses: current.plague ? current.minibosses.map(b => ({ ...b, phase: finished ? 'recover' : 'intro', phaseMs: finished ? 0 : Math.min(SURVIVAL_CONFIG.introMs, elapsed), animationMs: b.animationMs + dt })) : current.minibosses,
       lastAttackSerial: player.attackSerial, lastDashCooldown: player.dashCooldownMs };
   }
   const tuning = current.purgatorio ? purgatorioTuning(current.purgatorio.number, current.difficulty) : difficultyTuning(current.encounter.wave, current.difficulty);
@@ -1312,14 +1454,26 @@ export function advanceSurvival(current: SurvivalState, before: PlayerState, pla
   if (state.partner) state.partner = advanceBoss(state, state.partner, before, player, field, dt);
   if (state.hp === 0) return state;
   const newMinis = state.minibosses.slice(existingMinis.length);
+  const plaguePeers = state.plague ? [state.boss, ...existingMinis] : undefined;
   state.minibosses = [];
-  for (const mini of existingMinis) {
+  for (let miniIndex = 0; miniIndex < existingMinis.length; miniIndex++) {
+    const mini = existingMinis[miniIndex];
     if(mini.cloneOf&&(!state.boss||state.boss.entityId!==mini.cloneOf||state.boss.hp<=0)){stopOwnerSounds(state.events,mini.entityId!);continue;}
     if (state.hp === 0) { state.minibosses.push(mini); continue; }
-    const next = advanceBoss(state, mini, before, player, field, dt);
+    const next = advanceBoss(state, mini, before, player, field, dt, plaguePeers);
+    if (state.hp === 0) return state;
+    if (plaguePeers) plaguePeers[miniIndex + 1] = next;
     if (next) state.minibosses.push(next);
   }
   state.minibosses.push(...newMinis.filter(m=>!m.cloneOf||state.boss?.entityId===m.cloneOf&&state.boss.hp>0));
+  const swarm = state.plague;
+  const livingSwarm = Boolean(swarm && [state.boss, ...state.minibosses].some(b => b?.plague && b.hp > 0));
+  if (swarm && !swarm.rewarded && swarm.killed.length === swarm.memberIds.length && !livingSwarm) {
+    const last = [state.boss, ...state.minibosses].filter((b): b is BossState => Boolean(b?.plague)).sort((a, b) => a.phaseMs - b.phaseMs)[0];
+    state.plague = { ...swarm, rewarded: true };
+    state.events.boss++; state.stats.minibossKills++;
+    if (last) { dropOrb(state, last.x, last.y, 22); enqueueChest(state, last.x, last.y); }
+  }
   const group=state.droidGroup;
   if(group&&!group.rewarded&&group.killed.length&&!(state.boss?.packRemaining??0)&&![state.boss,...state.minibosses].some(b=>b?.groupId===group.id&&b.hp>0)){
     enqueueChest(state,group.x,group.y,'upgrade');state.droidGroup={...group,rewarded:true};
@@ -1327,23 +1481,33 @@ export function advanceSurvival(current: SurvivalState, before: PlayerState, pla
   const livingPack = (state.boss?.packRemaining ?? 0) > 0 || state.minibosses.some(m => m.packMember && m.hp > 0 && m.phase !== 'death');
   // Keep each member's identity/max HP after its death animation, so the pair
   // cannot accidentally become two encounters or retrigger the survivor heal.
-  if (!state.boss && oldBoss && (state.partner?.hp || livingPack)) state.boss = { ...oldBoss, hp: 0, phase: 'death', phaseMs: oldBoss.phaseMs + dt, corpseHidden: true };
+  if (!state.boss && oldBoss && (state.partner?.hp || livingPack || livingSwarm)) state.boss = { ...oldBoss, hp: 0, phase: 'death', phaseMs: oldBoss.phaseMs + dt, corpseHidden: true };
   if (!state.partner && oldPartner && (state.boss?.hp ?? 0) > 0) state.partner = { ...oldPartner, hp: 0, phase: 'death', phaseMs: oldPartner.phaseMs + dt, corpseHidden: true };
-  const defeated = Boolean((state.boss || oldBoss) && (state.boss?.hp ?? 0) <= 0 && (state.partner?.hp ?? 0) <= 0 && !livingPack);
+  const defeated = Boolean((state.boss || oldBoss) && (state.boss?.hp ?? 0) <= 0 && (state.partner?.hp ?? 0) <= 0 && !livingPack && !livingSwarm);
   if (defeated) {
+    const leader = state.boss ?? oldBoss;
+    const partner = state.partner ?? oldPartner;
+    // Only the real lethal-hit path can certify a defeat. Animation cleanup,
+    // clones, practice and individual replays cannot grant identification.
+    if (!state.tutorial && (!state.purgatorio || state.purgatorio.kind === 'infinite')
+      && leader?.defeatConfirmed && !leader.cloneOf && (!partner || partner.defeatConfirmed && !partner.cloneOf)
+      && isSpecialEnemy(leader.id) && (!state.plague || state.plague.rewarded)) {
+      const id = canonicalPurgatorioEnemy(leader.id), known = state.identifiedDefeats ?? [];
+      if (!known.includes(id)) state.identifiedDefeats = [...known, id];
+    }
     const t=state.missions!;
     if(!t.specialCounted){
       if(t.specialBoss&&t.damage===t.specialDamage){if(state.difficulty==='hard')t.perfectHard++;if(state.difficulty==='dystopia'&&state.maxHp===1)t.perfectImpossible++;}
       t.specialCounted=true;
     }
     // Normal skeleton supports and all attacks/statuses belong to their encounter.
-    state.minibosses = state.minibosses.filter(m => m.packMember && m.phase === 'death');
+    state.minibosses = state.minibosses.filter(m => (m.packMember || m.plague) && m.phase === 'death');
     state.hazards = []; state.poisonMs = 0; state.poisonTickMs = 0; state.stunMs = 0; state.npcBoostMs = 0;
     if (state.purgatorio?.phase === 'combat' && state.hp > 0) {
       const run = state.purgatorio;
       run.phase = 'defeated'; run.cleared++; run.lastClearedId = run.currentId;
       state.encounter.enemies = state.encounter.enemies.map(() => emptyNpc());
-      state.minibosses = state.minibosses.filter(m => m.packMember && m.phase === 'death'); state.bossActionUntilMs = 0;
+      state.minibosses = state.minibosses.filter(m => (m.packMember || m.plague) && m.phase === 'death'); state.bossActionUntilMs = 0;
       if (run.kind === 'single') {
         const corpses = [state.boss, state.partner, ...state.minibosses];
         const animationMs = corpses.reduce((ms, b) => Math.max(ms, b ? ENEMY_DEFS[b.id].deathDurationMs - b.phaseMs : 0), 0);
@@ -1355,6 +1519,7 @@ export function advanceSurvival(current: SurvivalState, before: PlayerState, pla
       }
     }
   }
+  if (state.plague?.rewarded && !state.boss && !state.minibosses.some(m => m.plague)) state.plague = undefined;
   if(state.droidGroup?.rewarded&&!state.boss&&!state.minibosses.some(m=>m.groupId===state.droidGroup!.id))state.droidGroup=undefined;
   if (!state.boss && state.partner?.hp === 0 && state.partner.phaseMs >= ENEMY_DEFS[state.partner.id].deathDurationMs) state.partner = null;
   if (!defeated && state.mode === 'playing') advanceHazards(state, player, field, dt);
@@ -1394,8 +1559,7 @@ export function advanceSurvival(current: SurvivalState, before: PlayerState, pla
       encounter.spawnMs = Math.max(0, encounter.spawnMs - dt);
       if (state.pendingBoss && state.clockMs >= state.world.specialRetryAtMs) {
         const position = findSpawn(state,player,field,true);
-        if (position) beginSpecial(state,selectEnemy(state,wavePlan(encounter.wave,state.difficulty).boss!,false),position,player,'scheduled',field);
-        else state.world.specialRetryAtMs = state.clockMs + 200;
+        if (!position || !beginSpecial(state,selectEnemy(state,wavePlan(encounter.wave,state.difficulty).boss!,false),position,player,'scheduled',field)) state.world.specialRetryAtMs = state.clockMs + 200;
       }
       // A busy/failed special attempt never blocks common spawns or accumulates
       // past scheduled bosses. Only the short existing presentation suspends them.

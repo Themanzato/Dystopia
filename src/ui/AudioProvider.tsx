@@ -24,6 +24,7 @@ import {
 
 export type UiSound = 'press' | 'pause' | 'resume';
 type GameAudio = {
+  initializationError?: string | null; retryAudio?: () => void;
   settings: AudioSettings;
   ready: boolean;
   error: string | null;
@@ -63,8 +64,11 @@ export function AudioProvider({
   const [settings, setSettings] = useState<AudioSettings>(DEFAULT_AUDIO_SETTINGS);
   const [ready, setReady] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [audioAttempt, setAudioAttempt] = useState(0);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const retryAudio = useCallback(() => { setAudioReady(false); setInitializationError(null); setAudioError(null); setAudioAttempt(n => n + 1); }, []);
   const mounted = useRef(true);
   const hydrated = useRef(false);
   const pendingPatch = useRef<Partial<AudioSettings>>({});
@@ -127,17 +131,20 @@ export function AudioProvider({
   }, [ready, settings]);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false, settled = false;
+    const fail=()=>{if(!cancelled&&!settled){settled=true;setInitializationError('No se pudo inicializar el audio. Reintenta.');reportAudioError();}};
+    const timeout=setTimeout(fail,20000);
     void setAudioModeAsync({
       allowsRecording: false,
       playsInSilentMode: true,
       shouldPlayInBackground: false,
       interruptionMode: 'doNotMix',
     }).then(() => {
-      if (!cancelled) setAudioReady(true);
-    }).catch(reportAudioError);
-    return () => { cancelled = true; };
-  }, [reportAudioError]);
+      clearTimeout(timeout);
+      if (!cancelled&&!settled) { settled=true;setAudioReady(true); setInitializationError(null); }
+    }).catch(() => {clearTimeout(timeout);fail();});
+    return () => { cancelled = true; clearTimeout(timeout); };
+  }, [reportAudioError, audioAttempt]);
 
   useEffect(() => {
     // Listen only for actual failures, not playback time: no React render loop.
@@ -229,11 +236,11 @@ export function AudioProvider({
 
   const value = useMemo<GameAudio>(() => ({
     settings,
-    ready,
+    ready: ready && audioReady, initializationError, retryAudio,
     error: storageError ?? audioError,
     updateSettings,
     playUi,
-  }), [settings, ready, storageError, audioError, updateSettings, playUi]);
+  }), [settings, ready, audioReady, initializationError, retryAudio, storageError, audioError, updateSettings, playUi]);
 
   return <AudioContext.Provider value={value}>{children}</AudioContext.Provider>;
 }

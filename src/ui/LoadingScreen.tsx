@@ -14,6 +14,7 @@ import { useLoadingMinimum } from './useLoadingMinimum';
 import { LOADING_BANNER, LOADING_BANNER_SIZE } from './loadingArt';
 
 type Props = {
+  minimumMs?: number; onRetry?: () => void;
   progress?: number; selection: ReturnType<typeof chooseLoading>;
   active: boolean;
   presented: boolean;
@@ -25,7 +26,7 @@ type Props = {
 };
 const sampling = { filter: FilterMode.Nearest, mipmap: MipmapMode.None };
 
-export default function LoadingScreen({ progress=0, selection, active, presented, ready, error, onReady, onExited, onDismiss }: Props) {
+export default function LoadingScreen({ progress=0, selection, active, presented, ready, error, onReady, onExited, onDismiss, minimumMs, onRetry }: Props) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { entity, tip } = selection;
@@ -39,7 +40,7 @@ export default function LoadingScreen({ progress=0, selection, active, presented
   const tipLoaded = useCallback(() => setTipReady(true), []);
   const artReady = Boolean((image || imageError) && (banner || bannerError) && nameReady && tipReady && backgroundReady);
   const layout = useMemo(() => loadingLayout(width, height, entity), [width, height, entity]);
-  const minimumComplete = useLoadingMinimum(active && presented && artReady && !error);
+  const minimumComplete = useLoadingMinimum(active && presented && artReady && !error, minimumMs);
   const notified = useRef(false);
   const time = useSharedValue(0);
   const running = useSharedValue(false);
@@ -133,6 +134,7 @@ export default function LoadingScreen({ progress=0, selection, active, presented
       <UIFrame style={s.failurePanel}>
         <PixelText text="No se pudo cargar" size={21} maxWidth={440} color="#c4c6b4" />
         <PixelText text={error} size={12} maxWidth={440} color="#9ca28e" />
+        {onRetry&&<Pressable accessibilityRole="button" accessibilityLabel="Reintentar carga" onPress={onRetry}><UIFrame variant="button" style={s.failureButton}><PixelText text="Reintentar" size={16} align="center"/></UIFrame></Pressable>}
         <Pressable accessibilityRole="button" accessibilityLabel="Volver al menú" onPress={onDismiss}>
           <UIFrame variant="button" style={s.failureButton}><PixelText text="Volver al menú" size={16} /></UIFrame>
         </Pressable>

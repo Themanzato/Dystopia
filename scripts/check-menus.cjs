@@ -24,7 +24,7 @@ Module._extensions['.png'] = (module, filename) => {
   module.exports = filename;
 };
 const appListeners = new Set(), backListeners = new Set(), routeListeners = new Set();
-let pathname = '/', mounts = 0, unmounts = 0;
+let pathname = '/', mounts = 0, unmounts = 0,battleMounts=0;
 const uiSounds = [], openedLinks = [], preparations = [];
 const saved=new Map([['@dystopia/tutorial/v1',JSON.stringify({version:1,offered:true,skipped:true,completed:false})]]);
 let rejectLink = false;
@@ -47,6 +47,7 @@ const GameProbe = ({ paused, onPause, onPausePressIn, onReady, onError, difficul
   React.useEffect(() => () => { unmounts++; }, []);
   return React.createElement('GameProbe', { paused, onPause, onPausePressIn, onReady, onError, difficulty, selection, onPurgatorioClear, onRetry, onExit, onChangeDifficulty, sessionId, tutorial, initialEquipment, onTutorialComplete, onTutorialStartGame });
 };
+const BattleProbe=props=>{const[instanceId]=React.useState(()=>++battleMounts);return React.createElement('BattleAudioProbe',{...props,instanceId});};
 const native = {
   AppState: { currentState: 'active', addEventListener: (_event, callback) => {
     appListeners.add(callback); return { remove: () => appListeners.delete(callback) };
@@ -69,6 +70,7 @@ const originalLoad = Module._load;
 Module._load = function(name, parent, main) {
   if (name === '@react-native-async-storage/async-storage') return {__esModule:true,default:{getItem:async key=>saved.get(key)??null,setItem:async(key,value)=>{saved.set(key,value)}}};
   if (name === './PixelText' && /(?:Menus|DifficultyMenu|PurgatorioMenu|PausePowerups|ScoreMenu|MenuEconomy|EquipmentPreview|WorkshopMenu|TutorialOffer)\.tsx$/.test(parent?.filename||'')) return { __esModule: true, default: props => React.createElement('PixelProbe', props) };
+  if (name === './WorkshopDemonstration') return {__esModule:true,default:props=>React.createElement('WorkshopPreviewProbe',props)};
   if (name === './UpgradeIcon') return {__esModule:true,default:props=>React.createElement('UpgradeIconProbe',props)};
   if (name === './PurgatorioPortrait') return {__esModule:true,default:props=>React.createElement('PortraitProbe',props)};
   if (name === './ControlSettingsPanel') return { __esModule: true, default: props => React.createElement('ControlSettingsProbe', props) };
@@ -86,6 +88,7 @@ Module._load = function(name, parent, main) {
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
   };
   if (parent?.filename.endsWith('Application.tsx')) {
+    if(name==='./BattleAudio')return {BATTLE_AUDIO_TOTAL:36,BattleAudio:BattleProbe};
     if (name === './MenuPreparation') return { __esModule: true, default: ({ children }) => children };
     if (name === '../game/CourtyardScreen') return { __esModule: true, default: GameProbe };
     if (name === './MenuBackdrop') return { __esModule: true, default: props => React.createElement('BackdropProbe', props) };
@@ -377,25 +380,33 @@ async function finishLoad(target = 'BackdropProbe') {
   // fresh retry, persist only ordered victories, and route the infinite chain.
   await press('Purgatorio');assert.equal(pathname,'/purgatorio');noLoading();noDarkness();
   const {PURGATORIO_ROSTER:R,purgatorioName}=req('./src/game/purgatorio.ts');const D=req('./src/game/enemyCatalog.ts').ENEMY_DEFS;
-  for(let i=0;i<R.length;i++){const b=button(purgatorioName(R[i])+(i?', bloqueado':''));assert.equal(b.props.disabled,i>0);}
-  assert.equal(R.length,13); assert(!find(n=>n.props.testID==='purgatorio-archer-bandit'));
-  assert(find(n=>n.props.testID==='bandit-pair-preview'),'One card previews both original bandits');
-  for(const id of ['dagger-bandit','archer-bandit']) assert(find(n=>n.type==='PortraitProbe'&&n.props.id===id));
-  await press('Dystopia');assert.equal(button('Dystopia').props.accessibilityState.selected,true);
-  await act(async()=>button(D[R[1]].name+', bloqueado').props.onPress());noLoading();assert.equal(pathname,'/purgatorio');
-  await back();assert.equal(pathname,'/');noLoading();await press('Purgatorio');
-  await press(D[R[0]].name);await completeDarkness('cover');await finishLoad('GameProbe');paused(false);
-  assert.equal(one('GameProbe').props.selection.mode,'purgatorio');assert.equal(one('GameProbe').props.selection.encounter,R[0]);assert.equal(one('GameProbe').props.difficulty,'dystopia');
-  await act(async()=>one('GameProbe').props.onPurgatorioClear(R[0]));assert(saved.get('@dystopia/purgatorio/v1').includes(R[0]));
+
+  for(let i=0;i<R.length;i++)assert(find(n=>n.props.testID==='purgatorio-unknown-'+i));
+  assert.equal(R.length,14);assert(!find(n=>n.props.testID==='bandit-pair-preview'));assert(!find(n=>n.type==='PortraitProbe'));
+  await act(async()=>find(n=>n.props.testID==='purgatorio-unknown-0').props.onPress());assert(find(n=>n.props.testID==='purgatorio-identification-requirement'));noLoading();await press('Cerrar requisito');
+  // The session guard must reject even a direct stale/forged locked selection.
+
+  const store=req('./src/ui/PurgatorioProgress.ts');await act(async()=>{store.recordPurgatorioVictory(R[0]);store.recordPurgatorioVictory('dagger-bandit');});
+  assert(find(n=>n.props.testID==='bandit-pair-preview'));for(const id of ['dagger-bandit','archer-bandit'])assert(find(n=>n.type==='PortraitProbe'&&n.props.id===id));
+  await press('Dystopia');await press(D[R[0]].name);await completeDarkness('cover');await finishLoad('GameProbe');paused(false);
+  assert.equal(one('GameProbe').props.selection.encounter,R[0]);assert.equal(one('GameProbe').props.difficulty,'dystopia');
+  const oldSave=saved.get('@dystopia/purgatorio/v1');await act(async()=>one('GameProbe').props.onPurgatorioClear(R[1]));assert.equal(saved.get('@dystopia/purgatorio/v1'),oldSave,'Individual callback cannot identify another enemy');
   await act(async()=>one('GameProbe').props.onChangeDifficulty());
   await completeDarkness('cover'); assert.equal(pathname,'/difficulty');
   await finishLoad(); noLoading(); noDarkness();
   await press('Difícil'); await completeDarkness('cover'); await finishLoad('GameProbe');
   assert.equal(one('GameProbe').props.selection.encounter,R[0],'Changing difficulty retries the same Purgatorio encounter');
   assert.equal(one('GameProbe').props.difficulty,'hard');
-  const priorId=gameId();await act(async()=>one('GameProbe').props.onRetry());assert.notEqual(gameId(),priorId);assert.equal(one('GameProbe').props.selection.encounter,R[0]);assert.equal(one('GameProbe').props.difficulty,'hard');
+  const priorId=gameId(),audioInstance=one('BattleAudioProbe').props.instanceId;await act(async()=>one('GameProbe').props.onRetry());assert.notEqual(gameId(),priorId);assert.equal(one('GameProbe').props.selection.encounter,R[0]);assert.equal(one('GameProbe').props.difficulty,'hard');
+  assert.equal(one('BattleAudioProbe').props.instanceId,audioInstance,'Restart preserves the actual audio owner');
+  assert.equal(loading().minimumMs,0,'Cached retries have no artificial five-second minimum');paused(true);
+  const failedGame=one('GameProbe').props,failedLoad=loading(),preparedItems=failedGame.initialEquipment;
+  await act(async()=>failedGame.onError('Fixture essential audio failure'));assert.equal(loading().error,'Fixture essential audio failure');
+  await act(async()=>loading().onRetry());assert.notEqual(gameId(),failedGame.sessionId);assert.deepEqual(one('GameProbe').props.initialEquipment,preparedItems,'Resource retry retains the same already-consumed equipment');assert.equal(one('BattleAudioProbe').props.instanceId,audioInstance);
+  await act(async()=>{failedGame.onReady();failedGame.onError('Stale error');failedLoad.onExited();});assert.equal(loading().error,null);assert.equal(loading().ready,false,'Callbacks from the failed attempt cannot complete a new attempt');
+  await finishLoad('GameProbe');paused(false);
   await act(async()=>one('GameProbe').props.onExit());await completeDarkness('cover');await finishLoad();await press('Purgatorio');
-  assert.equal(button(D[R[1]].name).props.disabled,false);assert.equal(button(D[R[2]].name+', bloqueado').props.disabled,true);
+  assert(find(n=>n.props.testID==='purgatorio-unknown-1'));assert(find(n=>n.props.testID==='purgatorio-unknown-2'));await act(async()=>store.recordPurgatorioVictory(R[1]));
   await press('Difícil');await press(D[R[1]].name);await completeDarkness('cover');await finishLoad('GameProbe');assert.equal(one('GameProbe').props.selection.encounter,R[1]);assert.equal(one('GameProbe').props.difficulty,'hard');
   await act(async()=>one('GameProbe').props.onExit());await completeDarkness('cover');await finishLoad();await press('Purgatorio');await press('Infinito');await completeDarkness('cover');await finishLoad('GameProbe');assert.equal(one('GameProbe').props.selection.encounter,'infinite');assert.equal(one('GameProbe').props.difficulty,'hard');
 

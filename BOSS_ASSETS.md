@@ -33,3 +33,18 @@ El indicador de salto usa escala 3 (63 × 30 unidades), y el Slam recupera su es
 
 Los seis strips originales `Electricuitioner-*` y `Volley Projectile 157x122.png` se inspeccionaron completos y por celdas. Dimensiones, frames, anclajes y usos se detallan en [ELECTROCUTIONER.md](ELECTROCUTIONER.md). `BossCombatEffects` ahora mantiene **doce** atlas fijos, incluido el proyectil eléctrico; no se carga la hoja combinada de 16014 píxeles ni se alteran originales.
 
+## The Plague: cuatro insectos originales
+
+Se inspeccionaron visualmente las veinte imágenes PNG de `enemies/mini bosses/The plague/` completas y sus celdas. También se leyeron las etiquetas y duraciones de los cuatro originales `.aseprite`. Las hojas combinadas contienen tres filas: reposo/vuelo, ataque y muerte. El relleno transparente restante de cada fila no es un fotograma. Se conservan, en cambio, las cuatro celdas vacías auténticas dentro de las secuencias de muerte: dos parpadeos del pequeño y las dos celdas finales del grande, comprobadas también en los strips individuales.
+
+| Variante | Hoja utilizada | Celda | Reposo / ataque / muerte | Duración por celda |
+| --- | --- | --- | --- | --- |
+| Pequeño | `Small Bug/Small Insect without shadow 20x28.png` (200 × 84) | 20 × 28 | 4 / 6 / 10 | 65 ms |
+| Mediano | `Medium Bug/Medium Insect without shadow 34x37.png` (340 × 111) | 34 × 37 | 8 / 10 / 10 | 65 ms |
+| Mediano alargado | `Medium bug 2/Medium2 bug 88x37.png` (968 × 111) | 88 × 37 | 8 / 8 / 11 | 70 ms |
+| Grande | `Big Bug/Big Insect without shadow 72x44 sprite sheet.png` (936 × 132) | 72 × 44 | 8 / 6 / 13 | 65 ms |
+
+`plagueAssets.ts` mantiene los cuatro atlas, los anclajes estables, los límites visibles y las duraciones. Los cuerpos se dibujan a escala 2 conservando sus diferencias reales de tamaño; el margen ancho de los ataques no se confunde con el tamaño del cuerpo. El recurso mediano alargado incluye su sombra original; no se añade otra sombra. Las otras variantes usan la versión sin sombra disponible para permitir el movimiento visual de vuelo. `Medium2 bug.png` es una tira de poses de referencia distinta, no una quinta especie ni una animación adicional.
+
+El reposo y el vuelo usan el mismo bucle auténtico. Durante la preparación, las alas repiten ese bucle a 1.7 veces su cadencia habitual y el cuerpo pulsa suavemente entre 68 % y 100 % de opacidad; el retroceso y el sonido completan el aviso sin dibujar hitboxes. No se reproduce un segundo ataque durante la preparación. El ataque y la muerte recorren su secuencia completa una vez. No se usan las filas de muerte como animación de vuelo. `scripts/check-plague-assets.cjs` contrasta etiquetas, tiempos, dimensiones, cada píxel de las 102 celdas contra los strips originales, selección de variante en `bossFrame`, aviso y final de cada muerte. No se modifica ningún PNG ni archivo de Aseprite.
+

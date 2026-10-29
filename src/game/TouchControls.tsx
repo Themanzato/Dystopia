@@ -1,6 +1,6 @@
 import { suspendFrenesisAttack, releaseFrenesisAttack } from './frenesis';
 import type { SurvivalState } from './survival';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -12,8 +12,11 @@ import { useControlSettings } from '../ui/ControlPreferences';
 import { requestAttack, beginDash, DASH_COOLDOWN_MS, JOYSTICK_TRAVEL, joystickInput, REST_INPUT, type MoveInput, type PlayerState } from './player';
 
 type Props = { player: SharedValue<PlayerState>; input: SharedValue<MoveInput>; enabled: boolean; onPause?: () => void; onPausePressIn?: () => void;
+  preparing?:boolean;onPrepared?:()=>void;onError?:(error:Error)=>void;
   gameState?: SharedValue<SurvivalState>; clock?: SharedValue<{running:boolean;firstFrame:boolean}>; pauseAvailable?: boolean };
-export function TouchControls({ player, input, enabled, onPause, onPausePressIn, gameState, clock, pauseAvailable = false }: Props) {
+export function TouchControls({ player, input, enabled, onPause, onPausePressIn, gameState, clock, pauseAvailable = false,preparing=false,onPrepared,onError }: Props) {
+  const art=useRef(new Set<string>()),laidOut=useRef(false);
+  const prepared=(id:string)=>{art.current.add(id);if(laidOut.current&&art.current.has('attack')&&art.current.has('dash'))onPrepared?.();};
   const { settings } = useControlSettings();
   const window = useWindowDimensions(), insets = useSafeAreaInsets();
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
@@ -107,24 +110,25 @@ export function TouchControls({ player, input, enabled, onPause, onPausePressIn,
     transform: [{ scale: dashPressed.value ? 0.95 : 1 }],
   }));
   const recoveryStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: Math.max(0, Math.min(1, 1 - player.value.dashCooldownMs / (DASH_COOLDOWN_MS * (player.value.dashCooldownMultiplier ?? 1)))) }] }));
-  if (!enabled && !pauseAvailable) return null;
-  return <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onLayout={event => {
+  if (!enabled && !pauseAvailable && !preparing) return null;
+  return <View style={[StyleSheet.absoluteFill,{opacity:preparing?0:1}]} pointerEvents={preparing?'none':'box-none'} accessibilityElementsHidden={preparing} importantForAccessibility={preparing?'no-hide-descendants':'auto'} onLayout={event => {
     const { width: w, height: h } = event.nativeEvent.layout;
+    laidOut.current=w>0&&h>0;prepared('layout');
     setViewport(previous => previous?.width === w && previous?.height === h ? previous : { width: w, height: h });
   }}>
-    {enabled && <><GestureDetector gesture={gestures.stick} touchAction="none" userSelect="none">
+    {(enabled||preparing) && <><GestureDetector gesture={gestures.stick} touchAction="none" userSelect="none">
       <View testID="game-control-joystick" style={[styles.zone, { left: boxes.joystick.x, top: boxes.joystick.y, width: boxes.joystick.width, height: boxes.joystick.height }]} collapsable={false} accessibilityLabel="Joystick: mueve en ocho direcciones. Desliza poco para caminar o hasta el borde para correr.">
         <View style={{ opacity: elementOpacity(settings,'joystick') }}><ControlVisual id="joystick" width={boxes.joystick.visualWidth} height={boxes.joystick.visualHeight} knobStyle={knobStyle} /></View>
       </View>
     </GestureDetector>
       <GestureDetector gesture={gestures.dash} touchAction="none" userSelect="none">
         <View testID="game-control-dash" style={[styles.zone, { left: boxes.dash.x, top: boxes.dash.y, width: boxes.dash.width, height: boxes.dash.height }]} collapsable={false} accessibilityRole="button" accessibilityLabel="Dash: impulsa en la dirección de movimiento o de la última orientación.">
-          <Animated.View style={dashStyle}><ControlVisual id="dash" width={boxes.dash.visualWidth} height={boxes.dash.visualHeight} recoveryStyle={recoveryStyle} /></Animated.View>
+          <Animated.View style={dashStyle}><ControlVisual id="dash" width={boxes.dash.visualWidth} height={boxes.dash.visualHeight} recoveryStyle={recoveryStyle} onReady={()=>prepared('dash')} onError={onError}/></Animated.View>
         </View>
       </GestureDetector>
       <GestureDetector gesture={gestures.attack} touchAction="none" userSelect="none">
         <View testID="game-control-attack" style={[styles.zone, { left: boxes.attack.x, top: boxes.attack.y, width: boxes.attack.width, height: boxes.attack.height }]} collapsable={false} accessibilityRole="button" accessibilityLabel="Ataque. En Frenesis: toca para tajos, mantén pulsado para girar.">
-          <Animated.View style={attackStyle}><ControlVisual id="attack" width={boxes.attack.visualWidth} height={boxes.attack.visualHeight} /></Animated.View>
+          <Animated.View style={attackStyle}><ControlVisual id="attack" width={boxes.attack.visualWidth} height={boxes.attack.visualHeight} onReady={()=>prepared('attack')} onError={onError}/></Animated.View>
         </View>
       </GestureDetector>
     </>}

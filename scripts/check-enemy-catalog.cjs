@@ -27,10 +27,10 @@ for(const [id,visual]of Object.entries(baseline.exports.ENEMY_VISUALS))for(const
 console.log('Boss scales passed: all clips +20%, Guardian +30%, unrelated enemies unchanged; original crops, pivots and frame counts preserved.');
 const sources = Array.from(fs.readFileSync(path.join(root, 'src/game/enemyVisuals.ts'), 'utf8')
   .matchAll(/require\('([^']+\.png)'\)/g), match => path.resolve(root, 'src/game', match[1]));
-assert.equal(sources.length, 34);
-assert.equal(MINIBOSS_IDS.length, 6); assert.equal(BOSS_IDS.length, 8); assert.equal(MINION_IDS.length, 3);
+assert.equal(sources.length, 38);
+assert.equal(MINIBOSS_IDS.length, 7); assert.equal(BOSS_IDS.length, 8); assert.equal(MINION_IDS.length, 3);
 const ids = [...MINIBOSS_IDS, ...BOSS_IDS, ...MINION_IDS];
-assert.equal(new Set(ids).size, 17); assert.equal(Object.keys(ENEMY_VISUALS).length, 17);
+assert.equal(new Set(ids).size, 18); assert.equal(Object.keys(ENEMY_VISUALS).length, 18);
 function readRgbaPng(filename) {
   const png = fs.readFileSync(filename), compressed = [];
   assert.equal(png.toString('hex', 0, 8), '89504e470d0a1a0a', 'Real PNG input');
@@ -124,4 +124,4 @@ assert.equal(ENEMY_VISUALS['shock-sweeper'].idle.frames, 1, 'A single original s
 assert.equal(ENEMY_VISUALS.archer.attack.stepY, 25, 'Archer vertical strip uses 25px cells');
 assert.equal(ENEMY_VISUALS['bomb-droid'].attack.stepY, 77, 'Bomb Droid attack uses its larger 116x77 cells');
 assert.equal(ENEMY_VISUALS['rock-boss'].attack.authoredFacing, -1);
-console.log(`Enemy catalog checks passed: 6 minibosses + 8 bosses + 3 Skeleton supports, ${totalFrames} authored cells, 34 original textures and clamped intro/attack/death animation.`);
+console.log(`Enemy catalog checks passed: 7 minibosses + 8 bosses + 3 Skeleton supports, ${totalFrames} authored cells, 38 original textures and clamped intro/attack/death animation.`);

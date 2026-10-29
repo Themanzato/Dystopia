@@ -20,13 +20,14 @@ import { chooseUpgrade, UPGRADE_INFO, type SurvivalState } from '../game/surviva
 import PixelText from './PixelText';
 import { UIFrame } from './PixelArt';
 import { useGameAudio } from './AudioProvider';
-import { BattleAudio } from './BattleAudio';
+import { BattleAudio, type BattleAudioSnapshot } from './BattleAudio';
 
 type Snapshot = {
+  identified: SpecialEnemyId[];
   frenesis: { active: boolean; hp: number };
   purgatorio: PurgatorioState | null;
   wave: number; remaining: number; hp: number; maxHp: number; armor:number; level: number; xp: number; xpNeeded: number;
-  endingReady: boolean; choices: string[]; offerId: number; mode: SurvivalState['mode']; boss: { name: string; hp: number; maxHp: number; powered: boolean; members: { name: string; hp: number; maxHp: number }[] } | null;
+  endingReady: boolean; choices: string[]; offerId: number; mode: SurvivalState['mode']; boss: { name: string; hp: number; maxHp: number; powered: boolean; insectsRemaining?: number; members: { name: string; hp: number; maxHp: number }[] } | null;
   presentation: BossCard | null; difficulty: SurvivalState['difficulty']; events: SurvivalState['events'];
 };
 function snapshot(s: SurvivalState): Snapshot {
@@ -35,8 +36,8 @@ function snapshot(s: SurvivalState): Snapshot {
   for (const npc of s.encounter.enemies) if (npc.active && npc.action !== 'death') remaining++;
   // Summoned normal skeletons count as remaining enemies, separately from the named
   // principal boss's health. Otherwise a boss wave could misleadingly show zero.
-  remaining += s.minibosses?.filter(m => m.phase !== 'death').length ?? 0;
-  const pack = (s.minibosses ?? []).filter(b => b.packMember);
+  remaining += s.minibosses?.filter(m => m.phase !== 'death' && m.id !== 'the-plague').length ?? 0;
+  const pack = (s.minibosses ?? []).filter(b => b.packMember || b.id === 'the-plague');
   const members = [s.boss, s.partner, ...pack].filter(b => b != null);
   const leader = s.boss ?? s.partner;
   const paired = Boolean(s.partner);
@@ -46,15 +47,17 @@ function snapshot(s: SurvivalState): Snapshot {
     hp: members.reduce((sum, b) => sum + livingHp(b), 0) + (leader.id === 'bomb-droid' ? (s.boss?.packRemaining ?? 0) * ENEMY_DEFS['bomb-droid'].hp : 0),
     maxHp: (s.encounterMaxHp ?? 0) > 0 ? s.encounterMaxHp! : members.reduce((sum, b) => sum + b.maxHp, 0),
     powered: members.some(b => (b.powerPhase ?? 0) > 0 || b.siblingRage === true),
+    ...(leader.id === 'the-plague' ? { insectsRemaining: members.filter(b => livingHp(b) > 0).length } : {}),
     members: paired ? members.map(b => ({ name: b.name, hp: livingHp(b), maxHp: b.maxHp })) : [],
   } : null;
   return { frenesis: { active: s.frenesis?.active ?? false, hp: s.frenesis?.hp ?? 0 }, purgatorio: s.purgatorio ?? null, wave: s.encounter.wave, remaining, hp: s.hp, maxHp: s.maxHp,armor:s.armor??0,
     level: s.level, xp: s.xp, xpNeeded: s.xpNeeded, endingReady: !s.ending || s.ending.ready, mode: s.mode, choices: s.choices, offerId: s.upgradeOfferId,
-    boss,
+    boss, identified: s.identifiedDefeats ?? [],
     presentation: s.presentation && s.boss ? { id: s.boss.id, name: s.encounterName || s.boss.name, entityId: s.presentation.entityId } : null,
     difficulty: s.difficulty, events: s.events };
 }
-export default function SurvivalHUD({ practice=false,survival, active, visible, onMode, onRetry, onExit, images, onPurgatorioClear, clock, onChangeDifficulty, runId: providedRunId, onAudioPrepared,onResumeAfterChoice,resumeBlocked }: {
+export default function SurvivalHUD({ practice=false,survival, active, visible, obscured=false, onPrepared,onError,onAudioState,onMode, onRetry, onExit, images, onPurgatorioClear, clock, onChangeDifficulty, runId: providedRunId, onAudioPrepared,onResumeAfterChoice,resumeBlocked }: {
+  obscured?:boolean; onPrepared?:()=>void; onError?:(error:Error)=>void; onAudioState?:(state:BattleAudioSnapshot)=>void;
   practice?:boolean; onAudioPrepared?:(completed:number,total:number)=>void; onResumeAfterChoice?:()=>void;resumeBlocked?:SharedValue<boolean>;
   runId?: string; clock?: SharedValue<{ running: boolean; firstFrame: boolean }>;
   onPurgatorioClear?: (id: SpecialEnemyId) => void;
@@ -66,37 +69,55 @@ export default function SurvivalHUD({ practice=false,survival, active, visible, 
   const { width, height } = layout.windowWidth === windowWidth && layout.windowHeight === windowHeight ? layout : { width: windowWidth, height: windowHeight };
   const { playUi } = useGameAudio();
   const [hud, setHud] = useState(() => snapshot(survival.value));
-  const acknowledgedClear = useRef(0);
+  const live=useRef(true), preparedParts=useRef(new Set<string>()), laidOut=useRef(false);
+  useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
+  const prepared=useCallback((part:string)=>{
+    if(!live.current)return;
+    preparedParts.current.add(part);
+    if(laidOut.current&&['wave','enemies','life','level'].every(key=>preparedParts.current.has(key)))onPrepared?.();
+  },[onPrepared]);
+  useEffect(()=>{onAudioState?.({events:hud.events,mode:hud.mode,active});},[onAudioState,hud.events,hud.mode,active]);
+  const acknowledgedClear = useRef(new Set<SpecialEnemyId>());
+  const reportIdentified = useCallback((ids: readonly SpecialEnemyId[]) => {
+    const current = survival.value;
+    if (practice || current.tutorial || current.purgatorio?.kind === 'single') return;
+    for (const id of ids) if (!acknowledgedClear.current.has(id)) {
+      acknowledgedClear.current.add(id); onPurgatorioClear?.(id);
+    }
+  }, [practice, survival, onPurgatorioClear]);
+  useEffect(() => {
+    reportIdentified(survival.value.identifiedDefeats ?? []);
+    // Flush a confirmed kill even if navigation unmounts before its queued RN
+    // snapshot. The bounded cumulative set cannot lose a batched earlier win.
+    return () => reportIdentified(survival.value.identifiedDefeats ?? []);
+  }, [reportIdentified, survival]);
+  useEffect(() => { if (!active) reportIdentified(survival.value.identifiedDefeats ?? []); }, [active, reportIdentified, survival]);
   const [fallbackRunId] = useState(createRunId);
   const runId = providedRunId ?? fallbackRunId;
   const update = useCallback((next: Snapshot) => {
-    // Process each queued UI-thread victory before React batches HUD renders.
-    // A delayed JS frame must not skip the frontier's earlier unlock.
-    const run = next.purgatorio;
-    if (run?.lastClearedId && run.cleared > acknowledgedClear.current) {
-      acknowledgedClear.current = run.cleared;
-      onPurgatorioClear?.(run.lastClearedId);
-    }
+    if(!live.current)return;
+    reportIdentified(next.identified);
     // A queued RN callback can arrive after pause/intro completion. Render the
     // current simulation, never re-open an earlier card from its old snapshot.
     setHud(snapshot(survival.value));
-  }, [onPurgatorioClear,survival]);
+  }, [reportIdentified,survival]);
   useAnimatedReaction(() => {
     const s = survival.value;
-    let count = s.encounter.remaining + (s.minibosses?.filter(m => m.phase !== 'death').length ?? 0);
+    let count = s.encounter.remaining + (s.minibosses?.filter(m => m.phase !== 'death' && m.id !== 'the-plague').length ?? 0);
     for (const npc of s.encounter.enemies) if (npc.active && npc.action !== 'death') count++;
     const e = s.events;
-    return [s.armor??0,s.frenesis?.active ?? false, s.frenesis?.hp ?? 0, s.encounter.wave, count, s.hp, s.maxHp, s.level, s.xp, s.xpNeeded, s.mode, s.ending?.ready ?? true,
-      s.boss?.hp ?? 0, s.minibosses?.filter(b=>b.packMember).reduce((sum,b)=>sum+Math.max(0,b.hp),0) ?? 0, s.boss?.packRemaining ?? 0, s.boss?.name ?? '', s.boss?.phase ?? '', s.boss?.powerPhase ?? 0, s.boss?.siblingRage ?? false, s.partner?.hp ?? 0, s.partner?.phase ?? '', s.partner?.powerPhase ?? 0, s.partner?.siblingRage ?? false, s.encounterName ?? '', s.encounterMaxHp ?? 0, e.soundSerial??0,e.electricCharge??0,e.electricImpact??0,e.eventStart??0,e.eventComplete??0,e.eventCue??0,e.attack, e.damage, e.kill, e.pickup, e.level, e.chest, e.wave, e.boss, e.dash ?? 0, e.bossAttack ?? 0, e.death ?? 0, s.upgradeOfferId, e.bossIntro ?? 0, s.presentation?.entityId ?? 0, e.shipAlarm ?? 0, e.zoneReward ?? 0, e.bossHit ?? 0, e.bossPhase ?? 0, e.bossBeep ?? 0, s.purgatorio?.number ?? 0, s.purgatorio?.cleared ?? 0, s.purgatorio?.phase ?? '', s.purgatorio?.currentId ?? ''].join('|');
+    const identified = (s.identifiedDefeats ?? []).join(',');
+    return [identified,s.armor??0,s.frenesis?.active ?? false, s.frenesis?.hp ?? 0, s.encounter.wave, count, s.hp, s.maxHp, s.level, s.xp, s.xpNeeded, s.mode, s.ending?.ready ?? true,
+      s.boss?.hp ?? 0, s.minibosses?.filter(b=>b.packMember||b.id==='the-plague').reduce((sum,b)=>sum+Math.max(0,b.hp),0) ?? 0, s.boss?.packRemaining ?? 0, s.boss?.name ?? '', s.boss?.phase ?? '', s.boss?.powerPhase ?? 0, s.boss?.siblingRage ?? false, s.partner?.hp ?? 0, s.partner?.phase ?? '', s.partner?.powerPhase ?? 0, s.partner?.siblingRage ?? false, s.encounterName ?? '', s.encounterMaxHp ?? 0, e.soundSerial??0,e.electricCharge??0,e.electricImpact??0,e.eventStart??0,e.eventComplete??0,e.eventCue??0,e.attack, e.damage, e.kill, e.pickup, e.level, e.chest, e.wave, e.boss, e.dash ?? 0, e.bossAttack ?? 0, e.death ?? 0, s.upgradeOfferId, e.bossIntro ?? 0, s.presentation?.entityId ?? 0, e.shipAlarm ?? 0, e.zoneReward ?? 0, e.bossHit ?? 0, e.bossPhase ?? 0, e.bossBeep ?? 0, s.purgatorio?.number ?? 0, s.purgatorio?.cleared ?? 0, s.purgatorio?.phase ?? '', s.purgatorio?.currentId ?? ''].join('|');
   }, (key, previous) => { if (key !== previous) scheduleOnRN(update, snapshot(survival.value)); }, [survival, update]);
   useEffect(() => onMode(hud.mode, hud.endingReady), [hud.mode, hud.endingReady, onMode]);
   const compact = width < 740 || height < 360;
   return <>
-    <BattleAudio onPrepared={onAudioPrepared} active={active} suspended={hud.mode !== 'playing'} dead={hud.mode === 'dead'} events={hud.events} />
-    {visible && <View pointerEvents="box-none" style={StyleSheet.absoluteFill} onLayout={e => { const { width, height } = e.nativeEvent.layout; setLayout(old => old.width === width && old.height === height ? old : { width, height, windowWidth, windowHeight }); }}>
+    {!onAudioState&&<BattleAudio onPrepared={onAudioPrepared} onError={message=>onError?.(new Error(message))} active={active} suspended={hud.mode !== 'playing'} dead={hud.mode === 'dead'} events={hud.events} />}
+    {visible && <View pointerEvents={obscured?'none':'box-none'} accessibilityElementsHidden={obscured} importantForAccessibility={obscured?'no-hide-descendants':'auto'} style={[StyleSheet.absoluteFill,{opacity:obscured?0:1}]} onLayout={e => { const { width, height } = e.nativeEvent.layout; laidOut.current=width>0&&height>0;prepared('layout');setLayout(old => old.width === width && old.height === height ? old : { width, height, windowWidth, windowHeight }); }}>
       <GameUIOpacity>
-      <GameplayElement id="wave" viewport={{width,height}}><WaveReadout wave={hud.wave} run={hud.purgatorio} remaining={hud.remaining} width={elementSize('wave',{left:0,top:0,width,height}).width}/></GameplayElement>
-      <GameplayElement id="vitals" viewport={{width,height}}><View style={{flex:1,justifyContent:'flex-end'}}><PlayerVitals hud={hud}/></View></GameplayElement>
+      <GameplayElement id="wave" viewport={{width,height}}><WaveReadout wave={hud.wave} run={hud.purgatorio} remaining={hud.remaining} width={elementSize('wave',{left:0,top:0,width,height}).width} onReady={prepared} onError={onError}/></GameplayElement>
+      <GameplayElement id="vitals" viewport={{width,height}}><View style={{flex:1,justifyContent:'flex-end'}}><PlayerVitals hud={hud} onReady={prepared} onError={onError}/></View></GameplayElement>
       {hud.boss&&<BossHitHUD survival={survival}><GameplayElement id="boss" viewport={{width,height}}><BossReadout boss={hud.boss} width={Math.min(240,width*.33)}/></GameplayElement></BossHitHUD>}
       </GameUIOpacity>
       <FrenesisHUD viewport={{width,height}} survival={survival} active={active&&hud.mode==='playing'} clock={clock}/>
@@ -122,7 +143,7 @@ export default function SurvivalHUD({ practice=false,survival, active, visible, 
       </View>}
 
     </View>}
-    {!practice&&(hud.mode === 'dead' || hud.mode === 'won') && <RunResultPanel survival={survival} runId={runId} visible={visible && hud.endingReady} onRetry={onRetry} onExit={onExit} onChangeDifficulty={onChangeDifficulty} />}
+    {!practice&&(hud.mode === 'dead' || hud.mode === 'won') && <RunResultPanel survival={survival} runId={runId} visible={visible && !obscured && hud.endingReady} onRetry={onRetry} onExit={onExit} onChangeDifficulty={onChangeDifficulty} />}
   </>;
 }
 const s = StyleSheet.create({

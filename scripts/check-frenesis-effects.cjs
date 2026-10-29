@@ -4,6 +4,7 @@ const root=path.resolve(__dirname,'..'),cache=new Map();
 const jsx=(type,props)=>({type,props});
 const shared=value=>({value});
 const dependencies={react:{default:{},__esModule:true},'react/jsx-runtime':{jsx,jsxs:jsx},
+ '../ui/sharedImages':{useSharedImage:source=>source},
  'react-native-reanimated':{useDerivedValue:fn=>({get value(){return fn()}})},
  '@shopify/react-native-skia':{Group:'Group',Path:'Path',Atlas:'Atlas',FilterMode:{Nearest:0},MipmapMode:{None:0},
   rect:(x,y,width,height)=>({x,y,width,height}),Skia:{RSXform:(scale,r,x,y)=>({scale,r,x,y}),PathBuilder:{Make(){const ops=[];return {addRect:r=>ops.push({rect:r}),moveTo:(x,y)=>ops.push({move:[x,y]}),lineTo:(x,y)=>ops.push({line:[x,y]}),detach:()=>ops}}}}}};

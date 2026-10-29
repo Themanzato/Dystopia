@@ -6,6 +6,7 @@ const shared=value=>({value});
 const dependencies={react:{default:{},__esModule:true,useState:fn=>[fn(),()=>{}]},'react/jsx-runtime':{jsx,jsxs:jsx},
  'react-native':{View:'View',StyleSheet:{create:s=>s,absoluteFill:{}}},'react-native-worklets':{scheduleOnRN:()=>{}},
  'react-native-reanimated':{useAnimatedReaction:()=>{},useDerivedValue:fn=>({get value(){return fn()}})},
+ '../ui/sharedImages':{useSharedImage:source=>source},
  '@shopify/react-native-skia':{Group:'Group',Path:'Path',Atlas:'Atlas',Canvas:'Canvas',RadialGradient:'RadialGradient',Fill:'Fill',useImage:source=>source,FilterMode:{Nearest:0},MipmapMode:{None:0},
   rect:(x,y,width,height)=>({x,y,width,height}),Skia:{RSXform:(scale,r,x,y)=>({scale,r,x,y}),PathBuilder:{Make(){const ops=[];return {addCircle:(x,y,r)=>ops.push({circle:{x,y,r}}),close:()=>ops.push({close:true}),addRect:r=>ops.push({rect:r}),moveTo:(x,y)=>ops.push({move:[x,y]}),lineTo:(x,y)=>ops.push({line:[x,y]}),detach:()=>ops}}}}}};
 function load(file){const filename=path.join(root,file);if(cache.has(filename))return cache.get(filename).exports;const module={exports:{}};cache.set(filename,module);

@@ -164,7 +164,23 @@ async function runUI() { await act(async () => { for (const fn of uiQueue.splice
   await change({ boss: { ...droid, hp: 0, phase: 'death', packRemaining: 0 }, minibosses: [{ ...member, hp: 3 }, { ...member, entityId: 93 }] });
   assert.equal(one(n => n.props.accessibilityLabel === 'Vida de Bomb Droid: 9 de 18').props.accessibilityValue.now, 50, 'Defeating the leader never leaves a zero bar while companions live');
   assert.equal(all(n => n.props.testID === 'boss-partner-health').length, 0, 'Droid group stays one compact bar');
-  await change({ boss: previousBoss, minibosses: supportsBeforePack, encounterMaxHp: undefined });
+  const insect = (entityId,variant,hp,maxHp) => ({...previousBoss,id:'the-plague',name:'The Plague',entityId,hp,maxHp,phase:hp>0?'recover':'death',plague:{variant,height:4}});
+  const swarm = [insect(300,'small',2,2),insect(301,'medium',4,4),insect(302,'medium2',5,5),insect(303,'big',12,12),insect(304,'small',2,2),insect(305,'small',2,2)];
+  await change({boss:swarm[0],minibosses:swarm.slice(1),encounterName:'THE PLAGUE',encounterMaxHp:27});
+  assert.equal(one(n=>n.props.accessibilityLabel==='Vida de THE PLAGUE: 27 de 27').props.accessibilityValue.now,100);
+  assert(texts().includes('INSECTOS RESTANTES: 6'),'The swarm counter reports living insects separately from ordinary enemies');
+  const swarmMotionCalls=rnCalls;
+  survival.value.minibosses[0]={...survival.value.minibosses[0],x:120,y:140,animationMs:160,plague:{...survival.value.minibosses[0].plague,height:7}};
+  await flush();assert.equal(rnCalls,swarmMotionCalls,'Flight paths and visual height do not render the React HUD per frame');
+  await change({boss:{...swarm[0],hp:0,phase:'death'},minibosses:[{...swarm[1],hp:3},...swarm.slice(2)]});
+  assert.equal(one(n=>n.props.accessibilityLabel==='Vida de THE PLAGUE: 24 de 27').props.accessibilityValue.now,89,'A dead lead insect preserves the original denominator and all remaining HP');
+  assert(texts().includes('INSECTOS RESTANTES: 5'));
+  await change({minibosses:[{...swarm[1],hp:0,phase:'death'},...swarm.slice(2)]});
+  assert.equal(one(n=>n.props.accessibilityLabel==='Vida de THE PLAGUE: 21 de 27').props.accessibilityValue.now,78);
+  assert(texts().includes('INSECTOS RESTANTES: 4'));
+  assert(texts().includes('Enemigos 7'),'Swarm insects do not pollute the normal enemy counter');
+  assert.equal(all(n=>n.props.testID==='boss-partner-health').length,0,'The swarm remains a single compact encounter bar');
+  await change({ boss: previousBoss, minibosses: supportsBeforePack, encounterName: undefined, encounterMaxHp: undefined });
   await change({ xp: 20 });
   assert.equal(one(n => n.props.accessibilityLabel === 'EXP 20 de 40').props.accessibilityValue.now, 50);
   for (const dimensions of [[667, 375], [844, 390], [740, 320]]) {
@@ -223,7 +239,7 @@ async function runUI() { await act(async () => { for (const fn of uiQueue.splice
   const {createPurgatorio,PURGATORIO_ROSTER}=req('./src/game/purgatorio.ts');
   const run=createPurgatorio({mode:'purgatorio',encounter:'shielder'},123);
   await change({ending:undefined,mode:'playing',hp:1,difficulty:'dystopia',purgatorio:{...run,phase:'combat'}});assert(texts().includes('Encuentro 1'));assert(texts().includes('Individual'));
-  await change({purgatorio:{...run,phase:'defeated',cleared:1,lastClearedId:'shielder'}});assert.deepEqual(clears,['shielder']);
+  await change({purgatorio:{...run,phase:'defeated',cleared:1,lastClearedId:'shielder'}});assert.deepEqual(clears,[],'A Purgatorio phase/counter cannot identify a boss');await change({purgatorio:null,identifiedDefeats:['shielder']});assert.deepEqual(clears,['shielder']);
   await change({xp:30});assert.deepEqual(clears,['shielder'],'Other HUD events never duplicate an unlock');
   await change({mode:'won',boss:null});assert.equal(probe('BattleAudioProbe').props.suspended,true);assert.equal(probe('BattleAudioProbe').props.dead,false);assert.equal(modes.at(-1),'won');assert.equal(all(n=>n.props.testID==='purgatorio-victory').length,1);assert(texts().includes('Victoria'));await press('Volver a intentar');await press('Salir al menú');await press('Cambiar de dificultad');assert.equal(difficulties,1);assert.equal(retries,2);assert.equal(exits,2);
   const completedRoster=PURGATORIO_ROSTER.length;
@@ -234,10 +250,10 @@ async function runUI() { await act(async () => { for (const fn of uiQueue.splice
   const beforeBatch=clears.length;
   await act(async()=>{
     for(const [n,id] of [[completedRoster+1,'shielder'],[completedRoster+2,'evil-sage']]){
-      survival.set({...survival.value,purgatorio:{...survival.value.purgatorio,cleared:n,lastClearedId:id}});
+      survival.set({...survival.value,identifiedDefeats:[...(survival.value.identifiedDefeats??[]),id],purgatorio:{...survival.value.purgatorio,cleared:n,lastClearedId:id}});
       for(const token of reactions){const key=token.latestRef.current.prepare();token.latestRef.current.react(key,token.previous);token.previous=key;}
     }
-  });assert.deepEqual(clears.slice(beforeBatch),['shielder','evil-sage'],'React batching never loses the earlier frontier victory');
+  });assert.deepEqual(clears.slice(beforeBatch),['evil-sage'],'Cumulative defeat IDs survive batching and are reported once');
   const normalHp = survival.value.hp;
   await change({frenesis:{...survival.value.frenesis,active:true,hp:5,remainingMs:15000}});
   assert.equal(all(n=>n.props.testID==='frenesis-temporary-hp').length,1);
@@ -255,6 +271,12 @@ async function runUI() { await act(async () => { for (const fn of uiQueue.splice
   for (const text of seenText) for (const character of normalizePixelText(text)) {
     assert(character === '\n' || Object.hasOwn(PIXEL_GLYPHS, character), `Unsupported pixel-font character ${JSON.stringify(character)} in ${text}`);
   }
+  let preparedSignals=0;const audioSnapshots=[];
+  props={...props,active:false,visible:true,obscured:true,onPrepared:()=>preparedSignals++,onAudioState:value=>audioSnapshots.push(value)};
+  await render();assert.equal(all(n=>n.type==='BattleAudioProbe').length,0,'The host owns audio across keyed game retries; HUD must not create a second pool');
+  const hidden=one(n=>typeof n.props.onLayout==='function');assert.equal(hidden.props.pointerEvents,'none');assert.equal(hidden.props.style[1].opacity,0);
+  assert.equal(preparedSignals,0);await act(async()=>{hidden.props.onLayout({nativeEvent:{layout:{width,height}}});for(const node of all(n=>n.type==='PixelProbe'&&typeof n.props.onReady==='function'))node.props.onReady();});
+  assert(preparedSignals>0,'Hidden initial HUD must acknowledge layout plus real label image loads before first gameplay');assert.equal(audioSnapshots.at(-1).mode,survival.value.mode);assert.equal(audioSnapshots.at(-1).active,false,'The persistent pool also observes loading, pause and resume-countdown audio gates');
   await act(async () => renderer.updateContainer(null, root, null));
   assert.equal(reactions.size, 0, 'HUD observers detach on unmount');
   console.log('Survival HUD checks passed: exact enemy count, a single compact wave/enemy container and bottom vitals, centered combined/individual bandit bars, wine phase names and discrete hit/phase audio events, discrete React updates, nonmodal chests plus independent third-level choices, touch-safe compact layouts, audio gates and death/retry/exit callbacks.');

@@ -3,8 +3,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Asset } from 'expo-asset';
 import { Skia, type SkImage } from '@shopify/react-native-skia';
 
-// One decoded image per bundled menu/gallery source, shared by preloads and hooks.
-// Callers use finite, audited manifests; game actors continue to load lazily.
+// One decoded image per bundled source, shared by menu, preloads and gameplay.
+// Finite audited manifests own these resources across runs; run cleanup must
+// never dispose a texture that a loading card or another screen still uses.
 const pending = new Map<number, Promise<SkImage>>();
 const decoded = new Map<number, SkImage>();
 type ImageState = { request: object; image: SkImage | null; error: boolean };
@@ -65,8 +66,8 @@ export function useSharedImageState(source: number, valid = true): { image: SkIm
 }
 
 
-export function useSharedImage(source: number, onError?: (error: Error) => void): SkImage | null {
-  const { image, error } = useSharedImageState(source);
-  useEffect(() => { if (error) onError?.(new Error('No se pudo cargar una imagen de Dystopia.')); }, [error, onError]);
+export function useSharedImage(source: number | null, onError?: (error: Error) => void): SkImage | null {
+  const { image, error } = useSharedImageState(source ?? 0, source !== null);
+  useEffect(() => { if (source !== null && error) onError?.(new Error('No se pudo cargar una imagen de Dystopia.')); }, [source, error, onError]);
   return image;
 }

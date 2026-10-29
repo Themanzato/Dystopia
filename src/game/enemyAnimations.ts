@@ -1,11 +1,13 @@
 import { BOSS_BALANCE } from './bossBalance';
 import type { EnemyId } from './enemyCatalog';
+import { PLAGUE_VISUALS } from './plagueAssets';
 
 // Cell-exact clips verified against individual original animation strips.
 export type EnemyClip = { image: number; width: number; height: number; frames: number; x: number; y: number;
   stepX: number; stepY: number; pivotX: number; pivotY: number; scale: number; authoredFacing: number };
 export type EnemyVisual = { idle: EnemyClip; move: EnemyClip; attack: EnemyClip; death: EnemyClip; intro?: EnemyClip; [key: string]: EnemyClip | undefined };
 export const ENEMY_VISUALS: Record<EnemyId, EnemyVisual> = {
+  'the-plague': PLAGUE_VISUALS.medium2,
   "shielder": {
     "idle": {
       "image": 5,
@@ -1637,6 +1639,11 @@ export const ENEMY_VISUALS: Record<EnemyId, EnemyVisual> = {
   }
 }
 };
+
+// Archer supplies an authored disappearance only. Reuse that same 11-cell clip
+// in reverse for the arrival, so relocation happens while fully invisible and
+// ends on the original body pivot before locomotion resumes. No new pixels.
+ENEMY_VISUALS.archer.teleIn = { ...ENEMY_VISUALS.archer.tele!, y: 250, stepY: -25 };
 
 // Apply once to every authored clip, keeping feet/root offsets proportional.
 for(const [id,factor] of Object.entries(BOSS_BALANCE.visualScale)){

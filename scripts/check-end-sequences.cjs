@@ -21,7 +21,7 @@ function start(id,mode='easy'){
 let healthCases=0;
 for(const mode of ['easy','hard','dystopia']){
  const s=start('rock-boss',mode),old=Math.ceil(ENEMY_DEFS['rock-boss'].hp*bossMode(mode).hp*purgatorioTuning(1,mode).hpMultiplier);
- assert.equal(s.boss.maxHp,old*.70); assert.equal(s.boss.hp,s.boss.maxHp);healthCases++;
+ assert.equal(s.boss.maxHp,old*.70*(mode==='easy'?.8:1)); assert.equal(s.boss.hp,s.boss.maxHp);healthCases++;
 }
 let s=game.createSurvival(1,'dystopia');
 s.encounter.phase='spawning';s.encounter.remaining=1;s.encounter.spawnMs=1e8;

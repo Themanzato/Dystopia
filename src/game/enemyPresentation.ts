@@ -98,5 +98,6 @@ export const ENEMY_PRESENTATION_BOUNDS: Record<EnemyId, { x: number; y: number; 
     "width": 19,
     "height": 18
   },
-  electrocutioner:{x:63,y:54,width:21,height:44}
+  electrocutioner:{x:63,y:54,width:21,height:44},
+  'the-plague':{x:23,y:9,width:17,height:26},
 };

@@ -55,7 +55,7 @@ function load(filename) {
     fileName: resolved,
   }).outputText;
   vm.runInNewContext(code, {
-    module, exports: module.exports, console,
+    module, exports: module.exports, console,setTimeout,clearTimeout,
     require(name) {
       if (name === 'react') return react;
       if (name === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }) };
@@ -135,12 +135,13 @@ function start() {
   harness.value.updateSettings({ effects: 0.25 });
   harness.read.resolve('{"music":0.7,"effects":0.9,"muted":false}');
   await settle();
-  assert.equal(harness.value.ready, true);
+  assert.equal(harness.value.ready, false,'Settings alone cannot mark the native audio engine ready');
   assert.equal(harness.value.settings.music, 0.7);
   assert.equal(harness.value.settings.effects, 0.25, 'Early edits survive late storage response');
   assert.equal(music.playing, false, 'Hydrated settings must also wait for audio mode initialization');
   assert.equal(glitched.playing, false);
   harness.modeReady.resolve(); await settle();
+  assert.equal(harness.value.ready,true);
   assert.equal(music.playing, true);
   assert.equal(glitched.playing, false);
   assert.equal(music.volume, 0.7);
@@ -236,6 +237,9 @@ function start() {
   assert.equal(music.playing, false);
   assert.equal(harness.players.length, 5, 'Repeated loads reuse persistent players');
 
+  harness.modeReady=deferred();harness.value.retryAudio();await settle();assert.equal(harness.value.ready,false);
+  harness.modeReady.reject(new Error('native initialization failed'));await settle();assert(harness.value.initializationError);assert.equal(harness.value.ready,false);
+  harness.modeReady=deferred();harness.value.retryAudio();await settle();assert.equal(harness.value.initializationError,null);harness.modeReady.resolve();await settle();assert.equal(harness.value.ready,true);assert.equal(harness.value.error,null,'A successful explicit retry clears the old initialization error');
   storage.setItem = async () => { throw new Error('full'); };
   harness.value.updateSettings({ music: 0.2 }); await settle();
   assert.match(harness.value.error, /guardar/);

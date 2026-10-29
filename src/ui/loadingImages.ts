@@ -1,8 +1,9 @@
 import { LOADING_ENTITIES } from './loadingCatalog';
+import { PLAGUE_PORTRAITS } from './plaguePortraits';
 import { LOADING_BANNER } from './loadingArt';
 import { loadSharedImage, useSharedImageState } from './sharedImages';
 
-const sources = new Set([...LOADING_ENTITIES.map(entity => entity.source), LOADING_BANNER]);
+const sources = new Set([...LOADING_ENTITIES.map(entity => entity.source), ...PLAGUE_PORTRAITS.map(entity => entity.source), LOADING_BANNER]);
 export function useLoadingImage(source: number) {
   return useSharedImageState(source, sources.has(source));
 }

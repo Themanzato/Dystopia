@@ -1,5 +1,5 @@
 import EquipmentPreview from './EquipmentPreview';
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PURGATORIO_ROSTER, PURGATORIO_DIFFICULTY_NAMES, canSelectPurgatorio, purgatorioName } from '../game/purgatorio';
@@ -14,6 +14,7 @@ import { UIFrame, UIIcon } from './PixelArt';
 export default function PurgatorioMenu() {
   const session=useSession(),audio=useGameAudio(),insets=useSafeAreaInsets();
   const {progress,error}=usePurgatorioProgress();
+  const [requirement,setRequirement]=useState(false);
   const {width,height}=useWindowDimensions();
   const compact=width<740||height<360;
   const left=Math.max(20,insets.left),right=Math.max(20,insets.right);
@@ -38,25 +39,27 @@ export default function PurgatorioMenu() {
       <Pressable accessibilityRole="button" accessibilityLabel="Infinito" onPressIn={()=>audio.playUi()} onPress={()=>session.startPurgatorio('infinite')} style={{width:featureWidth}}>
         <UIFrame variant="danger" style={[s.infinite,{height:'100%'}]}>
           <PixelText text="Purgatorio infinito" size={compact?19:25} maxWidth={featureWidth-24} color="#edbfcc" align="center"/>
-          <View testID="purgatorio-infinite-art" style={{alignItems:'center',justifyContent:'center',paddingTop:6}}><PurgatorioPortrait id="tarnished-widow" width={featureWidth-28} height={Math.max(52,Math.min(128,height-272))} /></View>
+          <View testID="purgatorio-infinite-art" style={{alignItems:'center',justifyContent:'center',paddingTop:6}}>{canSelectPurgatorio('tarnished-widow',progress)?<PurgatorioPortrait id="tarnished-widow" width={featureWidth-28} height={Math.max(52,Math.min(128,height-272))}/>:<UIIcon icon="gamepad" size={compact?48:64}/>}</View>
         </UIFrame>
       </Pressable>
       <ScrollView testID="purgatorio-roster" style={{width:rosterWidth}} contentContainerStyle={s.list} showsVerticalScrollIndicator>
         {PURGATORIO_ROSTER.map((id,index)=>{
-          const unlocked=canSelectPurgatorio(id,progress),completed=index<progress.cleared.length,name=purgatorioName(id);
-          return <Pressable key={id} testID={`purgatorio-${id}`} accessibilityRole="button" accessibilityLabel={`${name}${unlocked?'':', bloqueado'}`}
-            accessibilityState={{disabled:!unlocked}} disabled={!unlocked} onPressIn={()=>audio.playUi()} onPress={()=>session.startPurgatorio(id)}>
-            <UIFrame variant={unlocked&&!completed?'primary':'button'} style={[s.card,{width:cardWidth},!unlocked&&s.locked]}>
-              <View style={s.cardTop}><PixelText text={String(index+1).padStart(2,'0')} size={9} color="#b6a2a6"/><UIIcon icon={completed?'check':unlocked?'right':'close'} size={14}/></View>
-              <PurgatorioPortrait id={id} width={id==='dagger-bandit'?cardWidth-18:96}/>
-              <PixelText text={name} size={compact?11:12} maxWidth={cardWidth-18} align="center" color={unlocked?'#ded3bd':'#9c8b93'}/>
-              <PixelText text={completed?'Superado':unlocked?'Disponible':'Bloqueado'} size={8} color={completed?'#93b6a0':'#aa7f90'}/>
+          const unlocked=canSelectPurgatorio(id,progress),name=unlocked?purgatorioName(id):'NO IDENTIFICADO';
+          return <Pressable key={id} testID={unlocked?`purgatorio-${id}`:`purgatorio-unknown-${index}`} accessibilityRole="button" accessibilityLabel={unlocked?name:'NO IDENTIFICADO, bloqueado'}
+            accessibilityHint={unlocked?'Iniciar encuentro individual':'Derrota a este jefe en Supervivencia o Purgatorio infinito para identificarlo'}
+            onPressIn={()=>audio.playUi()} onPress={()=>{if(unlocked)session.startPurgatorio(id);else setRequirement(true);}}>
+            <UIFrame variant="button" style={[s.card,{width:cardWidth},!unlocked&&s.locked]}>
+              <View style={s.cardTop}><PixelText text={String(index+1).padStart(2,'0')} size={9} color="#b6a2a6"/><UIIcon icon={unlocked?'check':'close'} size={14}/></View>
+              <View style={s.portrait}>{unlocked?<PurgatorioPortrait id={id} width={id==='dagger-bandit'||id==='the-plague'?cardWidth-18:Math.min(96,cardWidth-18)} height={68}/>:<PixelText text="?" size={44} color="#d4a6b3"/>}</View>
+              <View style={s.name}><PixelText text={name} size={compact?10:11} maxWidth={cardWidth-18} align="center" color={unlocked?'#ded3bd':'#b59ba7'}/></View>
+              <PixelText text={unlocked?'Identificado':'Bloqueado'} size={8} color={unlocked?'#93b6a0':'#aa7f90'}/>
             </UIFrame>
           </Pressable>;
         })}
       </ScrollView>
     </View>
     <EquipmentPreview />
+    {requirement&&<Pressable testID="purgatorio-identification-requirement" accessibilityRole="button" accessibilityLabel="Cerrar requisito" onPress={()=>setRequirement(false)} style={s.requirement}><UIFrame variant="panel" style={s.requirementCard}><PixelText text="Derrota a este jefe en Supervivencia o Purgatorio infinito para identificarlo" size={compact?11:13} maxWidth={Math.min(410,width-left-right-36)} align="center"/><PixelText text="Cerrar" size={10}/></UIFrame></Pressable>}
     {error&&<PixelText text={error} size={10} maxWidth={width-left-right} color="#d9a28e"/>}
   </View>;
 }
@@ -66,6 +69,8 @@ const s=StyleSheet.create({
   difficulties:{flexDirection:'row',gap:5},difficulty:{minHeight:40,paddingHorizontal:8,alignItems:'center',justifyContent:'center'},wine:{backgroundColor:'#35111e'},
   back:{minHeight:42,paddingHorizontal:10,flexDirection:'row',gap:6,alignItems:'center'},body:{flex:1,flexDirection:'row',gap:18},
   infinite:{backgroundColor:'#29101c',padding:12,alignItems:'center',justifyContent:'center',gap:10},
-  list:{flexDirection:'row',flexWrap:'wrap',gap:10,paddingBottom:14},card:{minHeight:144,padding:8,alignItems:'center',gap:5,backgroundColor:'#101017'},
+  list:{flexDirection:'row',flexWrap:'wrap',gap:10,paddingBottom:14},card:{height:164,padding:8,alignItems:'center',gap:5,backgroundColor:'#101017'},
+  portrait:{height:68,alignItems:'center',justifyContent:'center'},name:{height:32,alignItems:'center',justifyContent:'center'},
+  requirement:{...StyleSheet.absoluteFill,backgroundColor:'#040309b8',alignItems:'center',justifyContent:'center'},requirementCard:{padding:20,gap:16,alignItems:'center'},
   cardTop:{width:'100%',flexDirection:'row',alignItems:'center',justifyContent:'space-between'},locked:{opacity:0.55},
 });

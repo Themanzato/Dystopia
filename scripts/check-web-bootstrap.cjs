@@ -37,6 +37,8 @@ function inspect(file, chain = []) {
 for (const name of fs.readdirSync(path.join(project,'src/app'))) {
   if(name.endsWith('.tsx')) inspect(path.join(project,'src/app',name));
 }
+assert(visited.has(path.join(project,'src/ui/WorkshopDemonstration.tsx')),'Router audits the actual workshop preview boundary');
+assert(!visited.has(path.join(project,'src/ui/WorkshopDemoCanvas.tsx')),'Workshop CanvasKit surface stays behind the mounted lazy boundary');
 
 const cache = new Map();
 let uri='https://assets.test/icon.png',localUri=null,prefetchResult=true,prefetchCalls=[];

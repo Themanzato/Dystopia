@@ -1,8 +1,9 @@
 import { BOSS_IDS, MINIBOSS_IDS, ENEMY_DEFS, type EnemyId } from './enemyCatalog';
 import { difficultyTuning, type Difficulty } from './difficulty';
+import { createRotation, peekRotation, consumeRotation, type Rotation } from './rotation';
 
 export type SpecialEnemyId = (typeof MINIBOSS_IDS)[number] | (typeof BOSS_IDS)[number];
-/** Append new encounters: preserve the completed frontier of existing saves. */
+/** Stable encounter IDs; roster order is never used as an unlock condition. */
 export const PURGATORIO_ROSTER: readonly SpecialEnemyId[] = [...MINIBOSS_IDS, ...BOSS_IDS.filter(id => id !== 'archer-bandit')];
 export const BANDIT_ENCOUNTER_NAME = 'Archer and Dagger';
 export function canonicalPurgatorioEnemy(id: SpecialEnemyId): SpecialEnemyId {
@@ -25,26 +26,34 @@ export type PurgatorioState = {
   kind: 'single' | 'infinite'; currentId: SpecialEnemyId; number: number; cleared: number;
   phase: 'between' | 'combat' | 'defeated'; elapsedMs: number; retryAtMs: number;
   lastClearedId: SpecialEnemyId | null; randomSeed: number;
+  bag?: Rotation<SpecialEnemyId>;
 };
 export function isSpecialEnemy(id: unknown): id is SpecialEnemyId {
   'worklet';
   return typeof id === 'string' && (id === 'archer-bandit' || PURGATORIO_ROSTER.includes(id as SpecialEnemyId));
 }
+/** Peeking never counts an unsuccessful spawn. Every cycle shuffles all enabled
+ * encounters, including unidentified ones, using the fresh per-run seed. */
+export function nextPurgatorioEnemy(run: PurgatorioState): SpecialEnemyId {
+  'worklet';
+  const next = peekRotation(run.bag ?? createRotation<SpecialEnemyId>(run.randomSeed), PURGATORIO_ROSTER);
+  run.bag = next.rotation; run.randomSeed = next.rotation.seed;
+  return next.id!;
+}
 export function createPurgatorio(selection: RunSelection, seed: number): PurgatorioState | null {
   'worklet';
   if (selection.mode !== 'purgatorio') return null;
-  return { kind: selection.encounter === 'infinite' ? 'infinite' : 'single',
+  const run: PurgatorioState = { kind: selection.encounter === 'infinite' ? 'infinite' : 'single',
     currentId: isSpecialEnemy(selection.encounter) ? canonicalPurgatorioEnemy(selection.encounter) : PURGATORIO_ROSTER[0],
     number: 1, cleared: 0, phase: 'between', elapsedMs: PURGATORIO_CONFIG.transitionMs,
     retryAtMs: 0, lastClearedId: null, randomSeed: (seed ^ 0x70757267) >>> 0 };
+  if (run.kind === 'infinite') run.currentId = nextPurgatorioEnemy(run);
+  return run;
 }
-/** Fixed first pass, then seeded random picks without an immediate repeat. */
-export function nextPurgatorioEnemy(run: PurgatorioState): SpecialEnemyId {
+export function confirmPurgatorioAppearance(run: PurgatorioState, id: SpecialEnemyId): void {
   'worklet';
-  if (run.cleared < PURGATORIO_ROSTER.length) return PURGATORIO_ROSTER[run.cleared];
-  run.randomSeed = (Math.imul(run.randomSeed, 1664525) + 1013904223) >>> 0;
-  const pool = PURGATORIO_ROSTER.filter(id => id !== canonicalPurgatorioEnemy(run.currentId));
-  return pool[Math.floor(run.randomSeed / 4294967296 * pool.length)];
+  if (run.kind !== 'infinite' || !run.bag) return;
+  run.bag = consumeRotation(run.bag, canonicalPurgatorioEnemy(id));
 }
 /** Asymptotic growth; fixed one-unit damage and unchanged minimum tells/recovery. */
 export function purgatorioTuning(number: number, difficulty: Difficulty) {
@@ -60,10 +69,18 @@ export type PurgatorioProgress = { cleared: SpecialEnemyId[] };
 export function readPurgatorioProgress(raw: string | null): PurgatorioProgress {
   try {
     const data = raw ? JSON.parse(raw) : null;
+    if (data?.version === 2 && Array.isArray(data.cleared)) {
+      const ids = data.cleared.filter(isSpecialEnemy).map(canonicalPurgatorioEnemy);
+      return { cleared: PURGATORIO_ROSTER.filter(id => ids.includes(id)) };
+    }
     const list = data?.version === 1 && Array.isArray(data.cleared) ? data.cleared : [];
     const cleared: SpecialEnemyId[] = [];
     let cursor = 0;
-    for (const id of PURGATORIO_ROSTER) {
+    // v1 stored a completed prefix before The Plague existed. Keep that exact
+    // historical order: inserting a new mini boss must not erase old boss wins
+    // or grant identification of the new encounter without defeating it.
+    const legacyRoster = PURGATORIO_ROSTER.filter(id => id !== 'the-plague');
+    for (const id of legacyRoster) {
       if (list[cursor] !== id) break;
       cleared.push(id); cursor++;
       // v1 saves had two completed entries for the same joint encounter. Skip
@@ -74,10 +91,10 @@ export function readPurgatorioProgress(raw: string | null): PurgatorioProgress {
   } catch { return { cleared: [] }; }
 }
 export function canSelectPurgatorio(id: EnemyId | string, progress: PurgatorioProgress): id is SpecialEnemyId {
-  const index = PURGATORIO_ROSTER.indexOf(canonicalPurgatorioEnemy(id as SpecialEnemyId));
-  return index >= 0 && index <= progress.cleared.length;
+  return isSpecialEnemy(id) && progress.cleared.includes(canonicalPurgatorioEnemy(id));
 }
 export function progressAfterVictory(progress: PurgatorioProgress, id: SpecialEnemyId): PurgatorioProgress {
+  if (!isSpecialEnemy(id)) return progress;
   const canonical = canonicalPurgatorioEnemy(id);
-  return PURGATORIO_ROSTER[progress.cleared.length] === canonical ? { cleared: [...progress.cleared, canonical] } : progress;
+  return progress.cleared.includes(canonical) ? progress : { cleared: PURGATORIO_ROSTER.filter(key => key === canonical || progress.cleared.includes(key)) };
 }

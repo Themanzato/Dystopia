@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { Atlas, Fill, FilterMode, Group, MipmapMode, Picture, RadialGradient, Skia, rect, useImage, type SkCanvas, type SkColor, type SkImage, type SkPicture, type SkRect } from '@shopify/react-native-skia';
+import { Atlas, Fill, FilterMode, Group, MipmapMode, Picture, RadialGradient, Skia, rect, type SkCanvas, type SkColor, type SkImage, type SkPicture, type SkRect } from '@shopify/react-native-skia';
+import { useSharedImage as useImage } from '../ui/sharedImages';
 import { useDerivedValue, useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { ASSETS } from './assets';
 import { ActorLayers, type StaticActorLayers } from './ActorLayers';
@@ -12,6 +13,19 @@ type AnimatedProp = (typeof ANIMATED_PROPS)[number];
 type AnimationGroup = { sheet: Sheet; fps: number; slot: number; props: AnimatedProp[] };
 type StaticLayers = { ground: SkPicture; depths: number[]; behind: SkPicture[]; ahead: SkPicture[] };
 type SceneryLayer = 'all' | 'behind' | 'ahead';
+// These immutable pictures belong to the shared image set, not a game session.
+// A restart only replaces actor/state values and reuses the recorded city.
+const pictureCache=new WeakMap<SkImage,{sheets:LoadedSheets;static?:StaticLayers;actors?:StaticActorLayers}>();
+function cachedLayers(sheets:LoadedSheets,actors:true):StaticActorLayers;
+function cachedLayers(sheets:LoadedSheets,actors:false):StaticLayers;
+function cachedLayers(sheets:LoadedSheets,actors:boolean):StaticActorLayers|StaticLayers {
+  let entry=pictureCache.get(sheets.tiles);
+  if(!entry||Object.keys(ASSETS).some(key=>entry!.sheets[key as Sheet]!==sheets[key as Sheet])){
+    entry={sheets};pictureCache.set(sheets.tiles,entry);
+  }
+  if(actors)return entry.actors??=recordActorStaticLayers(sheets);
+  return entry.static??=recordStaticLayers(sheets);
+}
 const sampling = { filter: FilterMode.Nearest, mipmap: MipmapMode.None };
 const VISIBLE_COLOR = Skia.Color('white');
 const HIDDEN_COLOR = Skia.Color('transparent');
@@ -321,8 +335,8 @@ export function Scene({ onError, onReady, active = true, previewTimeMs, playerDe
   // Pictures are JSI resources released with their last JS/native reference.
   // Strict Mode effect cleanup must not dispose resources still being rendered.
   const hasActors = Boolean(actors && actorImages);
-  const layers = useMemo(() => sheets && !hasActors ? recordStaticLayers(sheets) : null, [sheets, hasActors]);
-  const actorLayers = useMemo(() => sheets && hasActors ? recordActorStaticLayers(sheets) : null, [sheets, hasActors]);
+  const layers = useMemo(() => sheets && !hasActors ? cachedLayers(sheets,false) : null, [sheets, hasActors]);
+  const actorLayers = useMemo(() => sheets && hasActors ? cachedLayers(sheets,true) : null, [sheets, hasActors]);
   const loaded = layers !== null || actorLayers !== null;
   const elapsed = useSharedValue(0);
   const ticks = useSharedValue<number[]>(FRAME_RATES.map(() => 0));

@@ -32,8 +32,8 @@ function portraitRaster(image: SkImage, entity: LoadingEntity, width: number, he
 /** Native portraits rasterize once at physical pixel size with nearest sampling.
  * The original gallery image is shared with loading screens. No live canvas,
  * animation loop or React update per frame is allocated for a roster card. */
-export default function PurgatorioPortrait({id,width=96,height=68,pixelScale}:{id:SpecialEnemyId;width?:number;height?:number;pixelScale?:number}) {
-  const entity = LOADING_ENTITIES.find(e=>e.id===id)!;
+export default function PurgatorioPortrait({id,width=96,height=68,pixelScale,entity:providedEntity}:{id:SpecialEnemyId;width?:number;height?:number;pixelScale?:number;entity?:LoadingEntity;sheetSize?:{width:number;height:number}}) {
+  const entity = providedEntity ?? LOADING_ENTITIES.find(e=>e.id===id)!;
   const {image} = useLoadingImage(entity.source);
   const uri = useMemo(()=>image?portraitRaster(image,entity,width,height,pixelScale):null,[image,entity,width,height,pixelScale]);
   return <View accessibilityLabel={entity.name} pointerEvents="none" style={{width,height}}>

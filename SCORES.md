@@ -55,6 +55,34 @@ El resumen espera la animación y el guardado existentes y muestra las Celdas ga
 
 Las compras ya no desbloquean ventajas permanentes. Comprar descuenta Celdas y guarda `{ id, cost }` en `economy.prepared`. Solo se admiten dos IDs distintos; el Taller separa las preparadas de las disponibles. Retirar devuelve exactamente el costo pagado y elimina la preparación, en una sola escritura. Los fallos de lectura/escritura no publican saldos ni consumos ficticios.
 
+El Taller muestra cuatro filas estables con el icono común, nombre corto, efecto
+breve y una columna derecha con icono de Celdas, precio y acción. Las ventajas
+preparadas se marcan en la fila y en dos casillas de la cabecera; no se duplican
+ni cambian de posición al comprar. El reembolso muestra el costo realmente
+pagado. Seleccionar una fila solo cambia la vista previa; comprar o retirar
+requiere pulsar su botón separado y mantiene el bloqueo contra doble pulsación.
+
+`WorkshopDemonstration.tsx` dibuja un único Swordmaster usando su spritesheet
+original y muestreo nearest. Su modelo puro `workshopPreviewModel.ts` consulta
+`workshopBonuses`: Botiquín muestra 5→6 PV (1→1 con vida única), Servo acelera el
+clip de ataque por ×1.08 sin aumentar daño, Botas aceleran el movimiento por
+×1.08 y Bobina llena 0→15% de Frenesis sin transformarlo. La animación usa un
+reloj compartido aislado, se detiene en segundo plano/al desmontar y no tiene
+acceso al jugador real, la economía, audio ni progresión. No se modifican assets.
+
+El wrapper `WorkshopDemonstration` carga el canvas de forma diferida al montar
+el Taller. Así el descubrimiento anticipado de rutas web no inicializa Skia
+antes de CanvasKit. `check-web-bootstrap` protege esta separación.
+
+La revisión del Taller pasó TypeScript, lint y 74 comprobaciones de proyecto
+(incluida la repetición de las pruebas afectadas tras corregir el arranque web).
+`check-workshop-preview` verifica 8.472 muestras aisladas y `check-workshop-menu`
+usa la economía real con almacenamiento simulado para selección sin compras,
+doble toque, saldo, reembolso, límite de dos, consumo por partida y vida única.
+Se comprobó en Chrome el movimiento de las cuatro vistas previas, ausencia de
+escrituras al seleccionarlas, compra/reembolso y persistencia al recargar, en
+844×390, 568×320, 667×375 y 1280×720. No se probó en celular físico.
+
 La selección pendiente se muestra en dificultad y Purgatorio. `EquippedRun` espera a `consumePreparedAdvantages(startId, difficulty)` antes de montar el juego: guarda el consumo y su recibo por ID de inicio, vacía las compras pendientes y devuelve la selección inmutable de esa partida. Un callback repetido del mismo inicio obtiene el mismo recibo sin consumir otra compra. Cada reintento crea un ID nuevo y comienza sin las ventajas ya usadas. No se cargan ventajas desde los récords ni desde un desbloqueo permanente. Un cierre después del consumo no restaura el consumible.
 
 Si se prepara un Botiquín en otro modo y después se inicia Imposible/Dystopia, se reembolsa en esa misma operación en vez de consumirlo sin efecto. `workshopBonuses` conserva además la protección de una vida. `createSurvival` aplica vida/carga iniciales una vez; `applyPlayerUpgrades` deriva velocidades desde las bases sin acumular porcentajes en cada render. La pausa agrupa los efectos de las ventajas consumidas con las mejoras reales de esa partida.

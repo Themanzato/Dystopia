@@ -1,0 +1,21 @@
+# Preparación de partidas y reinicios
+
+La partida comienza únicamente después de preparar la ciudad, todas las hojas de personajes/enemigos/FX que puede usar el juego, los controles, cofres, orbes, la fuente pixel art y los nombres del catálogo. `prepareGameInterface` utiliza exactamente el tamaño 14 del nombre del boss en el HUD; antes precargaba 16 en pantallas grandes y dejaba ese texto sin preparar.
+
+El progreso cuenta tareas completadas: ciudad, actores/FX, interfaz, HUD, controles, primer dibujo de Skia y los 34 reproductores más dos tareas de audio (inicialización del motor y reinicio de la pista). El HUD y los controles se montan inertes detrás de la carga: confirman su layout y la carga real de sus etiquetas e imágenes nativas antes de habilitar la simulación. Una captura asíncrona de 1×1 confirma un dibujo de Skia y se libera de inmediato. No se usa un avance de porcentaje por tiempo. El audio sigue además la señal de actividad del HUD para permanecer detenido durante la cuenta regresiva de reanudación.
+
+`GameHost` conserva un solo `BattleAudio` entre reintentos. Cambia la identidad de sesión, detiene los sonidos, limpia contadores de reproducción y rebobina la música; reemplaza atómicamente el componente que posee jugador, oleadas, HUD, encuentros, eventos, recompensas y reloj. Las imágenes decodificadas, archivos locales de sonido y grabaciones estáticas de la ciudad se comparten entre sesiones. No se liberan desde la limpieza de una partida. Los reproductores se liberan al salir del host de juego, por el ciclo de vida de Expo Audio.
+
+El reinicio usa el flujo real de carga con mínimo de presentación de 0 ms, conservando la transición breve. Una carga fallida ofrece **Reintentar carga**: reemplaza solamente el intento de preparación, manteniendo las ventajas ya consumidas para esa misma partida. Un reintento después de una derrota sí crea una partida nueva, sin volver a aplicar ventajas consumidas.
+
+La cola de audio admite tres preparaciones simultáneas. Los efectos de combate y la música son esenciales: no se inicia una partida silenciosa cuando fallan. Voces ambientales redundantes, voz genérica de boss/impacto/fase y música de derrota son opcionales; un fallo conserva el resto del audio. El plazo opcional de 8 s no puede dar por listos los esenciales. Cada transferencia tiene un límite de 30 s desde su turno; cada preparación nativa tiene 8 s. Un archivo opcional bloqueado libera su turno para no impedir los esenciales. Los errores esenciales muestran el reintento; una nueva preparación puede sustituir una fuente cuyo estado nativo conserva el error anterior.
+
+La inicialización del motor, el reinicio de música y la preparación final HUD/dibujo tienen un watchdog de 20 s que muestra un error recuperable, sin hacer esperar si ya terminaron. Pausa/suspensión cancela la cola pendiente y desactiva la simulación; salir/reiniciar retira listeners, callbacks, RAF y watchdogs del intento. Las descargas compartidas en curso pueden completar la caché, pero no reemplazar reproductores ni actualizar componentes desmontados. Reanudar no recrea reproductores ni rebobina la pista.
+
+## Memoria y comprobaciones
+
+La auditoría de dimensiones de los manifiestos de combate encontró 89 imágenes, unos 84.4 MiB de píxeles RGBA, y 33 archivos de audio únicos, unos 16.5 MiB en disco (34 reproductores porque dos avisos reutilizan un archivo). Es un cálculo del contenido, **no una medición de RAM/GPU de un celular**: las superficies de texto, grabaciones, buffers nativos y texturas pueden sumar memoria. Se evita duplicar decodificaciones y grabaciones al reiniciar. No se modificaron assets ni dependencias.
+
+Las regresiones cubren carga esencial/opcional, cancelación y recuperación, pool persistente, reproducción tras reinicio, HUD preparado antes de habilitar el reloj, alineación de compra y vida/invocaciones. La revisión en Expo web comprobó un inicio frío, tres reintentos, pausa/reanudación, estado limpio y Taller en 667×375, 844×390 y 1280×720. La validación nativa de APK y rendimiento físico sigue requiriendo un dispositivo.
+
+Referencias de compatibilidad: [Expo Audio SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/audio/), [Expo Asset SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/asset/) y API instalada de `CanvasRef` de Skia 2.6.2. Se conservaron las versiones del proyecto.

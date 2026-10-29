@@ -12,7 +12,7 @@ export function prepareControlArt():Promise<void> {
   return prepared;
 }
 /** Integer-grid RGBA pixel art; originals remain available and unchanged. */
-export function ControlArt({ kind }: { kind: keyof typeof CONTROL_ART }) {
+export function ControlArt({ kind,onReady,onError }: { kind: keyof typeof CONTROL_ART;onReady?:()=>void;onError?:(error:Error)=>void }) {
   const nearest=Platform.OS==='web'?{imageRendering:'pixelated'} as ImageStyle:undefined;
-  return <View pointerEvents="none" style={StyleSheet.absoluteFill}><Image source={CONTROL_ART[kind]} accessible={false} resizeMode="contain" fadeDuration={0} style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' },nearest]} /></View>;
+  return <View pointerEvents="none" style={StyleSheet.absoluteFill}><Image source={CONTROL_ART[kind]} onLoad={onReady} onError={event=>onError?.(new Error(event.nativeEvent.error))} accessible={false} resizeMode="contain" fadeDuration={0} style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' },nearest]} /></View>;
 }

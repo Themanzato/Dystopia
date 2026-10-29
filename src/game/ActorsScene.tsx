@@ -6,7 +6,8 @@ import { ENEMY_DEFS } from './enemyCatalog';
 import { FRENESIS_SOURCES, FRENESIS_CELL, frenesisFrame } from './frenesisAssets';
 import { frenesisVisualPosition } from './frenesis';
 import React, { useEffect, useMemo } from 'react';
-import { useImage, type SkImage } from '@shopify/react-native-skia';
+import { type SkImage } from '@shopify/react-native-skia';
+import { useSharedImage as useImage, useSharedImageState } from '../ui/sharedImages';
 import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 import { WorldEventGround } from './WorldEventEffects';
 import { OptionalEventGround } from './OptionalEventEffects';
@@ -15,11 +16,11 @@ import { NPC_ASSETS } from './npcAssets';
 import { NPC_POOL_SIZE, npcCell, npcFrame } from './npc';
 import { PLAYER_CELL, PLAYER_SCALE, playerFrame, type PlayerState } from './player';
 import { bossFrame } from './survivalAssets';
+import { plagueWarningOpacity } from './plagueAssets';
 import { useEnemyImages } from './enemyVisuals';
 import type { SurvivalState } from './survival';
 import type { Encounter } from './encounter';
 import type { RenderActor } from './renderTypes';
-import { useSharedImageState } from '../ui/sharedImages';
 import { DUMMY_CELL, TUTORIAL_DUMMY_SOURCES, tutorialDummyFrame, type TutorialRenderState } from './tutorialAssets';
 
 const PLAYER_ASSET = require('../../assets/assets/characters/The SwordMaster/Sword Master Sprite Sheet 90x37.png');
@@ -79,10 +80,10 @@ export function ActorsScene({ player, encounter, survival, active, onError, onRe
       const b = bosses[index];
       if (b.phase === 'death' && b.phaseMs >= ENEMY_DEFS[b.id].deathDurationMs) continue;
       const frame = bossFrame(b);
-      result.push({ id: 1000000 + (b.entityId ?? index), image: frame.image, source: frame.source, x: b.x, y: b.y, depth: b.y,
+      result.push({ id: 1000000 + (b.entityId ?? index), image: frame.image, source: frame.source, x: b.x, y: b.y - (b.plague?.height ?? 0), depth: b.y,
         scale: frame.scale, pivotX: frame.pivotX, pivotY: frame.pivotY,
         // Match logical facing with each sheet's actual weapon/body direction.
-        facingX: b.facingX * frame.authoredFacing, visible: frame.visible, opacity: bossHitOpacity(b.hitFlashMs??0)*(b.cloneOf?0.5:1) });
+        facingX: b.facingX * frame.authoredFacing, visible: frame.visible, opacity: bossHitOpacity(b.hitFlashMs??0)*(b.cloneOf?0.5:1)*(b.plague?plagueWarningOpacity(b):1) });
     }
     const merchant=state?.merchants?.active;
     if(merchant){const art=MERCHANT_ART[merchant.kind],visual=merchantVisual(merchant);result.push({id:2000000+merchant.id,image:frenesisOffset+8+art.image,source:visual.source,x:merchant.x,y:merchant.y,depth:merchant.y,scale:art.scale,pivotX:art.pivotX,pivotY:visual.pivotY,facingX:1,visible:true,opacity:visual.opacity});}

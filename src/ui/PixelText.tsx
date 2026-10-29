@@ -1,5 +1,5 @@
 import { loadSharedImage, useSharedImage } from './sharedImages';
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { Animated, Image, PixelRatio, StyleSheet, View } from 'react-native';
 import { FilterMode, MipmapMode, Skia, rect, type SkImage } from '@shopify/react-native-skia';
 import { PIXEL_FONT_SOURCE } from './pixelFontAsset';
@@ -66,10 +66,10 @@ export default function PixelText({ text, size = 18, color, maxWidth, dim = fals
       [{ ...glyph, x: 0, y: 0 }], glyph.width, glyph.height) }));
     return { base, faults };
   }, [image, layout, indices]);
-  useEffect(() => { if (rasters?.base) onReady?.(); }, [rasters, onReady]);
   return <View accessible accessibilityRole={accessibilityRole} accessibilityLabel={text} testID={testID}
     pointerEvents="none" style={{ width: layout.width, height: layout.height, opacity: dim ? 0.7 : 1 }}>
     {rasters?.base && <Image accessible={false} source={{ uri: rasters.base }} fadeDuration={0}
+      onLoad={onReady} onError={event => onError?.(new Error(event.nativeEvent.error))}
       style={[StyleSheet.absoluteFill, { tintColor }]} resizeMode="stretch" />}
     {rasters?.faults.map((glyph, index) => glyph.uri && <Animated.Image key={glyph.index} accessible={false}
       source={{ uri: glyph.uri }} fadeDuration={0} resizeMode="stretch" style={{ position: 'absolute',

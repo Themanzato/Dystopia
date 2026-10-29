@@ -21,8 +21,9 @@ Module._extensions['.png'] = (module, filename) => {
   module.exports = sourceIds.get(filename);
 };
 const { LOADING_ENTITIES } = req('./src/ui/loadingCatalog.ts');
+const { PLAGUE_PORTRAITS } = req('./src/ui/plaguePortraits.ts');
 const { LOADING_BANNER } = req('./src/ui/loadingArt.ts');
-const gallerySources = LOADING_ENTITIES.map(entity => entity.source);
+const gallerySources = [...new Set([...LOADING_ENTITIES, ...PLAGUE_PORTRAITS].map(entity => entity.source))];
 const calls = { from: [], download: [], network: [], read: [], decode: [], dispose: [] };
 const assets = new Map(), pendingDownloads = new Map(), failDecode = new Set(), failRead = new Set();
 function deferred() {
@@ -170,9 +171,9 @@ const count = (list, value) => list.filter(item => item === value).length;
   assert.equal(readRetry.current.image.source, 6);
   assert.equal(count(calls.network, 6), 1, 'Read retries also reuse Expo cached bytes');
 
-  for (const source of gallerySources.slice(6)) { await readRetry.update(source); await finish(source); }
+  for (const source of gallerySources) { await readRetry.update(source); if (!readRetry.current.image) await finish(source); }
   const beforeUnknown = calls.from.length;
-  const unknownSource = gallerySources.length + 2;
+  const unknownSource = Math.max(...sourceIds.values()) + 100;
   assert(!gallerySources.includes(unknownSource) && unknownSource !== LOADING_BANNER);
   await readRetry.update(unknownSource);
   assert.equal(readRetry.current.error, true);

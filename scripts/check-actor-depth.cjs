@@ -8,6 +8,7 @@ const original = Module._load;
 let skiaExports;
 const shared = value => ({ _isReanimatedSharedValue: true, value, set(next) { this.value = next; } });
 Module._load = function (name, parent, main) {
+    if(name==='../ui/sharedImages')return {useSharedImage:source=>skiaExports.useImage(source)};
     if (name === '@shopify/react-native-skia' && skiaExports)
         return skiaExports;
     if (name === 'react-native-reanimated')

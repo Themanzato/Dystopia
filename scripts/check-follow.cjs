@@ -20,6 +20,8 @@ const encounterApi = req('./src/game/encounter.ts');
 const survivalApi = req('./src/game/survival.ts');
 const navigationApi = req('./src/game/navigation.ts');
 const state = [], shared = [], effects = [], frames = [];
+const refs=[];let refIndex=0;const draws=[];
+global.requestAnimationFrame=fn=>{draws.push(fn);return draws.length;};global.cancelAnimationFrame=()=>{};
 let stateIndex = 0, sharedIndex = 0, effectIndex = 0, frameIndex = 0, stateWrites = 0;
 let queuedEffects = [], appStateListener;
 const calls = { player: 0, encounter: 0, navigation: 0 };
@@ -27,6 +29,7 @@ const ActorsScene = () => null;
 const TouchControls = () => null;
 let skiaMock = { Canvas: 'Canvas', Fill: 'Fill', Group: 'SkiaGroup' };
 const hooks = {
+  useRef(initial){return refs[refIndex++]??={current:initial};},
   useState(initial) {
     const index = stateIndex++;
     if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial;
@@ -47,6 +50,7 @@ const hooks = {
 };
 const original = Module._load;
 Module._load = function(name, parent, main) {
+  if(name==='../ui/sharedImages'&&parent?.filename.endsWith('Scene.tsx'))return {useSharedImage:(...args)=>skiaMock.useImage(...args)};
   if (name === './sharedImages' && parent?.filename.endsWith('MenuBackdrop.tsx')) return { useSharedImage: (...args) => skiaMock.useImage(...args) };
   if (name === 'react') return { ...react, ...hooks };
   if (name === 'react-native') return {
@@ -79,6 +83,7 @@ Module._load = function(name, parent, main) {
     return { useMenuGyroscope: () => ({ value: { x: 0, y: 0, receivedAtMs: 0 } }) };
   }
   if (parent?.filename.endsWith('CourtyardScreen.tsx')) {
+    if(name==='../ui/BattleAudio')return {BATTLE_AUDIO_TOTAL:36};
     if (name === 'react-native-safe-area-context') return { useSafeAreaInsets: () => ({ left: 0, right: 0, top: 0, bottom: 0 }) };
     if (name === '../ui/ControlPreferences') return { useControlSettings: () => ({ settings: {} }) };
     if (name === '../ui/controlLayout') return { controlArea: () => ({ width: 844, height: 390 }) };
@@ -110,9 +115,10 @@ Module._load = function(name, parent, main) {
 };
 const Screen = req('./src/game/CourtyardScreen.tsx').default;
 function render(props = {}) {
-  stateIndex = sharedIndex = effectIndex = frameIndex = 0;
+  stateIndex = sharedIndex = effectIndex = frameIndex = refIndex = 0;
   queuedEffects = [];
   const tree = Screen(props);
+  const canvas=find(tree,node=>node.type==='Canvas');if(canvas)canvas.props.ref.current={redraw(){},makeImageSnapshotAsync(){return {then(done){done({width:()=>1,height:()=>1,dispose(){}});return {catch(){}};}};}};
   for (const effect of queuedEffects) effect();
   return tree;
 }
@@ -151,7 +157,15 @@ tree = render(readiness);
 assert.equal(readySignals,0,'Visual readiness alone waits for real audio task completion');
 find(tree,node=>typeof node.props?.onAudioPrepared==='function').props.onAudioPrepared(15,15);
 tree=render(readiness);
-assert.equal(readySignals, 1, 'Complete scenery, actors, prepared labels and audio announce readiness');
+assert.equal(readySignals,0,'Resources alone cannot dismiss loading before the real HUD and first draw');
+assert.equal(frames[0].active,false);
+find(tree,node=>typeof node.props?.onPrepared==='function').props.onPrepared();
+tree=render(readiness);assert.equal(readySignals,0,'HUD waits for real controls as well as Skia');
+byType(tree,TouchControls).props.onPrepared();
+tree=render(readiness);assert.equal(readySignals,0,'HUD and control images still wait for Skia draw acknowledgement');
+while(draws.length)draws.shift()();
+tree=render(readiness);
+assert.equal(readySignals, 1, 'Complete scenery, actors, prepared HUD, audio and drawn scene announce readiness');
 tree = render(readiness);
 assert.equal(readySignals, 1, 'Stable readiness is not emitted on every render');
 assert.equal(frames[0].active, true, 'Scenery, player and NPC assets unlock simulation');

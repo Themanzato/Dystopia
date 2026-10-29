@@ -15,6 +15,8 @@ function load(relative, dependencies = {}) {
     if (id === './rotation') return load('src/game/rotation.ts');
     if (id === './upgradeBalance') return load('src/game/upgradeBalance.ts');
     if (id === './bossBalance') return load('src/game/bossBalance.ts');
+    if (id === './plagueAssets') return load('src/game/plagueAssets.ts');
+    if (id === './plague') return load('src/game/plague.ts',{'./collision':collision,'./difficulty':difficulty,'./map':map,'./navigation':navigation,'./purgatorio':load('src/game/purgatorio.ts',{'./enemyCatalog':enemyCatalog,'./difficulty':difficulty})});
     if (id === './chestPlacement') return load('src/game/chestPlacement.ts',{'./collision':collision,'./map':map});
     if (id === './missionTelemetry') return load('src/game/missionTelemetry.ts');
     if (id === './missions') return load('src/game/missions.ts');
@@ -61,6 +63,7 @@ function harness(states = []) {
   const jsx = (type, props) => ({ type, props });
   h.dependencies = {
     react: {
+      useRef:current=>({current}),
       useMemo: fn => fn(), useCallback: fn => fn,
       useEffect: fn => { const cleanup = fn(); if (cleanup) h.effects.push(cleanup); },
       useState: initial => { const index = h.statesRead++; return [index < states.length ? states[index] : typeof initial === 'function' ? initial() : initial, next => h.stateSets.push({ index, next })]; },
@@ -177,12 +180,18 @@ input.set({ x: 1, y: 0, strength: 1 });
 assert.equal(TouchControls({ player, input, enabled: false }), null);
 assert.equal(input.value, REST_INPUT, 'Disabled/background controls must not leave a stuck joystick');
 assert(h.gestures.slice(3).every(g => g.config.enabled === false));
+let controlLoads=0;const warming=TouchControls({player,input,enabled:false,preparing:true,onPrepared:()=>controlLoads++});
+assert.equal(warming.props.pointerEvents,'none');assert.equal(warming.props.style[1].opacity,0);assert.equal(controlLoads,0);
+warming.props.onLayout({nativeEvent:{layout:{width:844,height:390}}});
+for(const id of ['attack','dash'])nodes(warming,node=>node.props?.id===id)[0].props.onReady();
+assert.equal(controlLoads,1,'Both native control images and layout must be prepared behind the loading screen');assert.equal(input.value,REST_INPUT);
 
 // Exercise the real screen callback and derived camera, independently of React renders.
-const sh = harness(['844x390',{completed:15,total:15},null,true,true,null,true]);
+const sh = harness(['844x390',{completed:36,total:36},true,'844x390',true,null,true,true,null,true]);
 const ActorsScene = () => null, MockControls = () => null;
 const { default: Screen } = load('src/game/CourtyardScreen.tsx', {
   ...sh.dependencies, './ActorsScene': { ActorsScene }, './TouchControls': { TouchControls: MockControls },
+  '../ui/BattleAudio':{BATTLE_AUDIO_TOTAL:36},
 });
 const screen = Screen();
 assert.equal(nodes(screen, node => node.type === 'GestureDetector').length, 0, 'The scene must not retain a pan/pinch camera recognizer');

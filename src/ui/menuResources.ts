@@ -7,8 +7,9 @@ import { MENU_ASSETS } from './menuAssets';
 import { PIXEL_FONT_SOURCE } from './pixelFontAsset';
 import { TITLE_LETTERS } from './titleAssets';
 import { LOADING_ENTITIES } from './loadingCatalog';
+import { PLAGUE_PORTRAITS } from './plaguePortraits';
 
-const gallery = LOADING_ENTITIES.map(entity => entity.source);
+const gallery = [...LOADING_ENTITIES, ...PLAGUE_PORTRAITS].map(entity => entity.source);
 const ui = [...Object.values(UI_ASSETS), PIXEL_FONT_SOURCE];
 const title = TITLE_LETTERS.map(letter => letter.source);
 const prefetched = new Map<number, Promise<void>>();
@@ -36,6 +37,7 @@ export function prepareMenu(): Promise<void> {
     ...Object.entries(MENU_ASSETS).map(([key,source]):[number,string]=>[source,`fondo/${key === 'npc' ? 'enemigos' : key}`]),
     ...Object.entries(UI_ASSETS).map(([key,source]):[number,string]=>[source,`UI/${key}`]),
     ...LOADING_ENTITIES.map((entity):[number,string]=>[entity.source,`galería/${entity.id}`]),
+    ...PLAGUE_PORTRAITS.map((entity):[number,string]=>[entity.source,`galería/${entity.id}`]),
     ...TITLE_LETTERS.map((letter):[number,string]=>[letter.source,`título/${letter.character}`]),
     [PIXEL_FONT_SOURCE,'tipografía'],
   ]);

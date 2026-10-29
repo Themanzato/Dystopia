@@ -4,6 +4,7 @@ import { dustJumpTimeline } from './dustJumper';
 import type { Box } from './map';
 import { ENEMY_DEFS, type EnemyId } from './enemyCatalog';
 import { ENEMY_VISUALS } from './enemyAnimations';
+import { plagueFrame, type PlagueVariant } from './plagueAssets';
 
 export const SURVIVAL_ASSETS = {
   shielder: require('../../assets/assets/enemies/mini bosses/Shielder/Shielder 129x46 Sprite Sheet.png'),
@@ -22,9 +23,10 @@ export function chestFrame(phase: 'closed' | 'opening' | 'reward' = 'closed', ph
   const index = phase === 'closed' ? 0 : phase === 'reward' ? 39 : 24 + Math.min(15, Math.floor(Math.max(0, phaseMs) / Math.max(1, openingMs) * 16));
   return { x: index * 22, y: 0, width: 22, height: 26 };
 }
-export type BossVisualState = { id: EnemyId; phase: 'intro' | 'warning' | 'attack' | 'recover' | 'death'; phaseMs: number; animationMs: number; attackIndex?: number; attackRate?: number; dustCritical?:boolean };
+export type BossVisualState = { id: EnemyId; phase: 'intro' | 'warning' | 'attack' | 'recover' | 'death'; phaseMs: number; animationMs: number; attackIndex?: number; attackRate?: number; preparationMs?: number; dustCritical?:boolean; plague?: { variant: PlagueVariant } };
 export function bossFrame(boss: BossVisualState): { image: number; source: Box; scale: number; pivotX: number; pivotY: number; authoredFacing: number; visible: boolean } {
   'worklet';
+  if (boss.id === 'the-plague') return plagueFrame(boss);
   const visual = ENEMY_VISUALS[boss.id], definition = ENEMY_DEFS[boss.id];
   const move = bossAttack(boss.id, boss.attackIndex ?? 0);
   const rate = boss.attackRate ?? 1;
@@ -41,6 +43,9 @@ export function bossFrame(boss: BossVisualState): { image: number; source: Box; 
   if(boss.id==='electrocutioner'&&boss.phase==='warning'){
     clip=move.clip==='storm'?visual.stormCharge!:move.kind==='teleport'?visual.idle:visual.charge!;
     frame=Math.min(clip.frames-1,Math.floor(boss.phaseMs/Math.max(1,move.warningMs/rate)*clip.frames));
+  }
+  if (boss.id === 'evil-sage' && boss.phase === 'warning' && boss.preparationMs) {
+    frame = Math.min(clip.frames - 1, Math.floor(Math.max(0, boss.phaseMs) / boss.preparationMs * clip.frames));
   }
   let visible = true;
   if (boss.id === 'dust-jumper' && boss.phase === 'attack' && move.kind === 'jump') {

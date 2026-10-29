@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { useImage, type SkImage } from '@shopify/react-native-skia';
+import { type SkImage } from '@shopify/react-native-skia';
+import { useSharedImage as useImage } from '../ui/sharedImages';
 
 // Full original sheets and cell-exact clips, visually audited alongside the
 // supplied individual strips. Their order preserves the original actor indices.
@@ -38,6 +39,10 @@ export const ENEMY_IMAGE_SOURCES = [
   require('../../assets/assets/bosses/Electrocutioner/Electricuitioner-Teleport.png'), // 36 Electrocutioner Teleport
   require('../../assets/assets/bosses/Electrocutioner/Electricuitioner-Appear.png'), // 37 Electrocutioner Appear
   require('../../assets/assets/bosses/Electrocutioner/Electricuitioner-Death.png'), // 38 Electrocutioner Death
+  require('../../assets/assets/enemies/mini bosses/The plague/Small Bug/Small Insect without shadow 20x28.png'), // 39 plague small
+  require('../../assets/assets/enemies/mini bosses/The plague/Medium Bug/Medium Insect without shadow 34x37.png'), // 40 plague medium
+  require('../../assets/assets/enemies/mini bosses/The plague/Medium bug 2/Medium2 bug 88x37.png'), // 41 plague medium2
+  require('../../assets/assets/enemies/mini bosses/The plague/Big Bug/Big Insect without shadow 72x44 sprite sheet.png'), // 42 plague big
  ] as const;
 // Fixed hook count, conditional sources: menu previews never decode battle sheets.
 export function useEnemyImages(enabled: boolean, onError: (error: Error) => void): SkImage[] | null {
@@ -75,9 +80,13 @@ export function useEnemyImages(enabled: boolean, onError: (error: Error) => void
   const image31 = useImage(enabled ? ENEMY_IMAGE_SOURCES[31] : null, onError);
   const image32 = useImage(enabled ? ENEMY_IMAGE_SOURCES[32] : null, onError);
   const image33 = useImage(enabled ? ENEMY_IMAGE_SOURCES[33] : null, onError);
+  const image34 = useImage(enabled ? ENEMY_IMAGE_SOURCES[34] : null, onError);
+  const image35 = useImage(enabled ? ENEMY_IMAGE_SOURCES[35] : null, onError);
+  const image36 = useImage(enabled ? ENEMY_IMAGE_SOURCES[36] : null, onError);
+  const image37 = useImage(enabled ? ENEMY_IMAGE_SOURCES[37] : null, onError);
   return useMemo(() => {
     if (!enabled) return [];
-    const images = [image0, image1, image2, image3, image4, image5, image6, image7, image8, image9, image10, image11, image12, image13, image14, image15, image16, image17, image18, image19, image20, image21, image22, image23, image24, image25, image26, image27, image28, image29, image30, image31, image32, image33];
+    const images = [image0, image1, image2, image3, image4, image5, image6, image7, image8, image9, image10, image11, image12, image13, image14, image15, image16, image17, image18, image19, image20, image21, image22, image23, image24, image25, image26, image27, image28, image29, image30, image31, image32, image33, image34, image35, image36, image37];
     return images.every(Boolean) ? images as SkImage[] : null;
-  }, [enabled, image0, image1, image2, image3, image4, image5, image6, image7, image8, image9, image10, image11, image12, image13, image14, image15, image16, image17, image18, image19, image20, image21, image22, image23, image24, image25, image26, image27, image28, image29, image30, image31, image32, image33]);
+  }, [enabled, image0, image1, image2, image3, image4, image5, image6, image7, image8, image9, image10, image11, image12, image13, image14, image15, image16, image17, image18, image19, image20, image21, image22, image23, image24, image25, image26, image27, image28, image29, image30, image31, image32, image33, image34, image35, image36, image37]);
 }

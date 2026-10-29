@@ -20,9 +20,10 @@ import FrenesisScreenEffects from './FrenesisScreenEffects';
 import FrenesisMapInput from './FrenesisMapInput';
 import { suspendFrenesisAttack, frenesisVisualPosition } from './frenesis';
 import { SURVIVAL_SELECTION, type RunSelection, type SpecialEnemyId } from './purgatorio';
-import type { SkImage } from '@shopify/react-native-skia';
+import type { CanvasRef, SkImage } from '@shopify/react-native-skia';
+import { BATTLE_AUDIO_TOTAL, type BattleAudioSnapshot } from '../ui/BattleAudio';
 import type { Difficulty } from './difficulty';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWindowDimensions, AppState, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -49,13 +50,20 @@ type CameraView = CameraBounds & Viewport;
 const INITIAL_FIELD = buildFlowField(PLAYER_SPAWN);
 const TUTORIAL_FIELD = buildFlowField(TUTORIAL_SPAWN);
 type Props = { tutorial?:boolean; onTutorialComplete?:()=>void; onTutorialStartGame?:()=>void; resumeRequest?:number; onProgress?:(completed:number,total:number)=>void; initialEquipment?: WorkshopId[]; selection?: RunSelection; onPurgatorioClear?: (id: SpecialEnemyId) => void; difficulty?: Difficulty; paused?: boolean; onPause?: () => void; onPausePressIn?: () => void; onRetry?: () => void; onExit?: () => void; onChangeDifficulty?: () => void; onReady?: () => void; onError?: (message: string) => void };
-export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTutorialStartGame,resumeRequest=0,onProgress, initialEquipment = [], selection = SURVIVAL_SELECTION, onPurgatorioClear, difficulty = 'easy', paused = false, onPause, onPausePressIn, onRetry, onExit, onChangeDifficulty, onReady, onError: onLoadError }: Props = {}) {
+export default function CourtyardScreen({ externalAudioProgress,onAudioState,tutorial=false,onTutorialComplete,onTutorialStartGame,resumeRequest=0,onProgress, initialEquipment = [], selection = SURVIVAL_SELECTION, onPurgatorioClear, difficulty = 'easy', paused = false, onPause, onPausePressIn, onRetry, onExit, onChangeDifficulty, onReady, onError: onLoadError }: Props & {externalAudioProgress?:{completed:number;total:number};onAudioState?:(state:BattleAudioSnapshot)=>void} = {}) {
   const dimensions=useWindowDimensions(),insets=useSafeAreaInsets(),{settings:controlSettings}=useControlSettings();
   const tutorialTargets=useMemo(()=>tutorial?tutorialMapTargets(controlArea(dimensions.width,dimensions.height,insets),controlSettings):[],[tutorial,dimensions.width,dimensions.height,insets,controlSettings]);
   const interfaceKey=`${dimensions.width}x${dimensions.height}`;
   const [preparedInterface,setPreparedInterface]=useState('');
   const interfaceReady=preparedInterface===interfaceKey;
-  const [audioProgress,setAudioProgress]=useState({completed:0,total:17});
+  const [localAudioProgress,setAudioProgress]=useState({completed:0,total:BATTLE_AUDIO_TOTAL});
+  const audioProgress=externalAudioProgress??localAudioProgress;
+  const canvas=useRef<CanvasRef|null>(null),live=useRef(true);
+  useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
+  const [hudReady,setHudReady]=useState(false),[renderedKey,setRenderedKey]=useState('');
+  const [controlsReady,setControlsReady]=useState(false);
+  const onControlsPrepared=useCallback(()=>{if(live.current)setControlsReady(true);},[]);
+  const onHudPrepared=useCallback(()=>{if(live.current)setHudReady(true);},[]);
   const onAudioPrepared=useCallback((completed:number,total:number)=>setAudioProgress(old=>old.completed===completed&&old.total===total?old:{completed,total}),[]);
   const [assetError, setAssetError] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState(false);
@@ -74,7 +82,28 @@ export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTu
   const [endingReady, setEndingReady] = useState(false);
   const [practiceFinished,setPracticeFinished]=useState(false);
   const onHudMode = useCallback((mode: SurvivalState['mode'], complete = false) => { setMode(mode); setEndingReady(complete); }, []);
-  const ready = sceneReady && actorsReady && interfaceReady && audioProgress.completed===audioProgress.total;
+  const resourcesReady = sceneReady && actorsReady && interfaceReady && audioProgress.completed===audioProgress.total;
+  const ready = resourcesReady && hudReady && controlsReady && renderedKey===interfaceKey;
+  // A real Skia draw acknowledgement, not a delay standing in for readiness.
+  // Only one pixel is read back; the snapshot does not retain a second scene.
+  useEffect(()=>{
+    if(!resourcesReady||!hudReady||!controlsReady||!active||assetError||renderedKey===interfaceKey)return;
+    let mounted=true,frame=0;
+    frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{
+      if(!mounted)return;
+      canvas.current?.redraw();
+      void canvas.current?.makeImageSnapshotAsync({x:0,y:0,width:1,height:1}).then(image=>{
+        const drawn=image.width()>0&&image.height()>0;image.dispose();
+        if(mounted){if(drawn)setRenderedKey(interfaceKey);else setAssetError('La escena no se pudo preparar. Reintenta.');}
+      }).catch(cause=>{if(mounted)setAssetError('Escena: '+String(cause));});
+    });});
+    return()=>{mounted=false;cancelAnimationFrame(frame);};
+  },[resourcesReady,hudReady,controlsReady,active,assetError,renderedKey,interfaceKey]);
+  useEffect(()=>{
+    if(!resourcesReady||ready||!active||assetError)return;
+    const timeout=setTimeout(()=>setAssetError('No se pudo preparar el HUD o dibujar la primera escena. Reintenta la carga.'),20000);
+    return()=>clearTimeout(timeout);
+  },[resourcesReady,ready,active,assetError]);
   useEffect(() => {
     if (assetError) onLoadError?.(assetError);
     else if (ready) onReady?.();
@@ -88,7 +117,7 @@ export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTu
   const enabled=ready&&active&&!paused&&!assetError&&mode==='playing'&&countdown.number===null&&!practiceFinished;
   const presenting=ready&&active&&!paused&&!assetError&&countdown.number===null&&!practiceFinished&&(mode==='playing'||!endingReady&&(mode==='dead'||mode==='won'));
   useEffect(()=>{let mounted=true;void prepareGameInterface(dimensions.width,dimensions.height).then(()=>{if(mounted)setPreparedInterface(interfaceKey);}).catch(cause=>{if(mounted)setAssetError('Interfaz: '+String(cause));});return()=>{mounted=false;};},[dimensions.width,dimensions.height,interfaceKey]);
-  useEffect(()=>onProgress?.(Number(sceneReady)+Number(actorsReady)+Number(interfaceReady)+audioProgress.completed,3+audioProgress.total),[sceneReady,actorsReady,interfaceReady,audioProgress,onProgress]);
+  useEffect(()=>onProgress?.(Number(sceneReady)+Number(actorsReady)+Number(interfaceReady)+Number(hudReady)+Number(controlsReady)+Number(renderedKey===interfaceKey)+audioProgress.completed,6+audioProgress.total),[sceneReady,actorsReady,interfaceReady,hudReady,controlsReady,renderedKey,interfaceKey,audioProgress,onProgress]);
 
   useEffect(() => publishCurrentRun(survival), [survival]);
   const tutorialState=useDerivedValue(()=>survival.value.tutorial??null);
@@ -151,9 +180,9 @@ export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTu
     if (width <= 0 || height <= 0) return;
     view.set({ width, height, ...getCameraBounds({ width, height }) });
   }, [view]);
-  const onError = useCallback((error: Error) => setAssetError(error.message), []);
-  const onSceneReady = useCallback(() => setSceneReady(true), []);
-  const onActorsReady = useCallback(() => setActorsReady(true), []);
+  const onError = useCallback((error: Error) => {if(live.current)setAssetError(error.message);}, []);
+  const onSceneReady = useCallback(() => {if(live.current)setSceneReady(true);}, []);
+  const onActorsReady = useCallback(() => {if(live.current)setActorsReady(true);}, []);
   const phaseTint = useDerivedValue(() => Math.min(0.18, (survival.value.phaseFlashMs ?? 0) / 2600));
   const damageTint = useDerivedValue(() => damageFeedback(survival.value.invulnerableMs, SURVIVAL_CONFIG.invulnerableMs).tint);
   const cameraTransform = useDerivedValue(() => {
@@ -169,7 +198,7 @@ export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTu
   return <GestureHandlerRootView style={styles.screen}>
     <View style={styles.screen} onLayout={onLayout} collapsable={false} accessibilityLabel="Dystopia. Ciudad abandonada con The Swordmaster. Joystick a la izquierda, ataque y dash a la derecha. Cámara de seguimiento con escala fija.">
       <StatusBar hidden />
-      <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Canvas ref={canvas} style={StyleSheet.absoluteFill} pointerEvents="none">
         <Fill color={OUTSIDE_COLOR} />
         <Group transform={cameraTransform}>
           <ActorsScene training={tutorial} player={player} encounter={encounter} survival={survival} active={enabled} onError={onError} onReady={onSceneReady} onActorsReady={onActorsReady} onImages={setActorImages} />
@@ -191,9 +220,9 @@ export default function CourtyardScreen({ tutorial=false,onTutorialComplete,onTu
       <BossOffscreenIndicators survival={survival} view={view} camera={cameraTransform} visible={ready && !paused && !assetError} />
       <MerchantIndicator survival={survival} player={player} view={view} camera={cameraTransform} visible={ready && !paused && !assetError && mode==='playing'}/>
       </GameUIOpacity>
-      <SurvivalHUD practice={tutorial} onAudioPrepared={onAudioPrepared} onResumeAfterChoice={countdown.start} resumeBlocked={resumeBlocked} runId={resultId} clock={clock} images={actorImages} survival={survival} active={ready && active && !paused && !assetError && countdown.number===null} visible={ready && !paused && !assetError}
+      <SurvivalHUD practice={tutorial} onAudioState={onAudioState} onAudioPrepared={onAudioPrepared} onPrepared={onHudPrepared} onError={onError} obscured={!ready||paused} onResumeAfterChoice={countdown.start} resumeBlocked={resumeBlocked} runId={resultId} clock={clock} images={actorImages} survival={survival} active={ready && active && !paused && !assetError && countdown.number===null} visible={resourcesReady && !assetError}
         onMode={onHudMode} onPurgatorioClear={onPurgatorioClear} onRetry={onRetry} onExit={onExit} onChangeDifficulty={onChangeDifficulty} />
-      <TouchControls gameState={survival} clock={clock} player={player} input={input} enabled={enabled} pauseAvailable={countdown.number!==null} onPause={onPause} onPausePressIn={onPausePressIn} />
+      <TouchControls preparing={!ready&&!assetError} onPrepared={onControlsPrepared} onError={onError} gameState={survival} clock={clock} player={player} input={input} enabled={enabled} pauseAvailable={countdown.number!==null} onPause={onPause} onPausePressIn={onPausePressIn} />
       {!tutorial&&<MerchantPanel survival={survival} clock={clock} resumeBlocked={resumeBlocked} runId={resultId} visible={ready&&active&&!paused&&!assetError&&countdown.number===null} onClose={countdown.start}/>}
       {tutorial&&<TutorialHUD survival={survival} player={player} view={view} visible={ready&&active&&!paused&&!assetError&&countdown.number===null} onContinue={onTutorialContinue} onCompleted={onPracticeCompleted} onStartGame={()=>onTutorialStartGame?.()} onExit={()=>onExit?.()}/>}
       {countdown.number!==null&&<View testID="resume-countdown" pointerEvents="none" style={[StyleSheet.absoluteFill,{alignItems:'center',justifyContent:'center'}]}><PixelText key={countdown.number} text={String(countdown.number)} size={30} color="#e0c8c5"/></View>}

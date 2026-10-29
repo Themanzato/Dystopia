@@ -2,13 +2,14 @@
  * Animation cadences are gameplay tuning; active windows follow authored strike poses.
  * Attack behavior and bounded hazards are configured in bossAttacks/bossBalance.
  */
-export const MINIBOSS_IDS = ["shielder", "evil-sage", "archer", "bomb-droid", "dagger-mush", "shock-sweeper"] as const;
+export const MINIBOSS_IDS = ["shielder", "evil-sage", "archer", "bomb-droid", "dagger-mush", "shock-sweeper", "the-plague"] as const;
 export const BOSS_IDS = ["guardian", "skeleton-summoner", "dagger-bandit", "archer-bandit", "dust-jumper", "rock-boss", "tarnished-widow", "electrocutioner"] as const;
 export const MINION_IDS = ["skeleton-unarmed", "skeleton-archer", "skeleton-swordsman"] as const;
 export type EnemyId = (typeof MINIBOSS_IDS)[number] | (typeof BOSS_IDS)[number] | (typeof MINION_IDS)[number];
 export type EnemyDefinition = { name: string; tier: 'mini' | 'boss' | 'minion'; hp: number; speed: number;
   attackDurationMs: number; activeStartMs: number; activeEndMs: number; attackRange: number; attackSpeed: number; deathDurationMs: number };
 export const ENEMY_DEFS: Record<EnemyId, EnemyDefinition> = {
+  'the-plague': { name: 'The Plague', tier: 'mini', hp: 4, speed: 70, attackDurationMs: 560, activeStartMs: 210, activeEndMs: 420, attackRange: 42, attackSpeed: 220, deathDurationMs: 845 },
   electrocutioner:{name:'Electrocutioner',tier:'boss',hp:54,speed:58,attackDurationMs:2200,activeStartMs:930,activeEndMs:1600,attackRange:105,attackSpeed:0,deathDurationMs:1334},
   "shielder": {"name": "Shielder", "tier": "mini", "hp": 18, "speed": 42, "attackDurationMs": 1000, "activeStartMs": 350, "activeEndMs": 650, "attackRange": 94, "attackSpeed": 150, "deathDurationMs": 1143},
   "evil-sage": {"name": "The Evil Sage", "tier": "mini", "hp": 16, "speed": 55, "attackDurationMs": 1167, "activeStartMs": 250, "activeEndMs": 850, "attackRange": 105, "attackSpeed": 100, "deathDurationMs": 667},

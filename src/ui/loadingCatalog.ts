@@ -1,3 +1,5 @@
+import { PLAGUE_PORTRAITS } from './plaguePortraits';
+
 /**
  * Original PNGs audited visually as complete images and enlarged individual cells.
  * Cadences below are presentation choices: the PNGs contain no timing metadata.
@@ -135,6 +137,7 @@ export const LOADING_ENTITIES: readonly LoadingEntity[] = [
     bounds: { x: 53, y: 44, width: 62, height: 46 },
   },
   {id:'electrocutioner',name:'Electrocutioner',category:'Boss',description:'Figura encapuchada con destellos de electricidad cian.',source:require('../../assets/assets/bosses/Electrocutioner/Electricuitioner-Idle.png'),cell:{width:157,height:107},frames:12,fps:12,row:0,bounds:{x:63,y:54,width:21,height:44}},
+  { ...PLAGUE_PORTRAITS[2], id:'the-plague', name:'THE PLAGUE' },
 ];
 
 // These messages describe the current controls, scenery and common-enemy encounter.

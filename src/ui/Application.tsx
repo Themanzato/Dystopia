@@ -22,12 +22,14 @@ import { preloadPixelFont } from './pixelFontAsset';
 import { AudioProvider, useGameAudio } from './AudioProvider';
 import { SessionContext } from './session';
 import { UIArtProvider } from './PixelArt';
+import { BattleAudio, BATTLE_AUDIO_TOTAL, type BattleAudioSnapshot, type BattleAudioEvents } from './BattleAudio';
 
 type Stage = 'coverSource' | 'awaitVisual' | 'revealLoading' | 'loading';
 type Load = { id: number; kind: 'menu' | 'game'; selection: LoadingSelection; stage: Stage;
-  destination?: '/difficulty'; progress?:number; targetReady: boolean; visualReady: boolean; error: string | null };
+  restart?: boolean; destination?: '/difficulty'; progress?:number; targetReady: boolean; visualReady: boolean; error: string | null };
 const Game = memo(CourtyardScreen);
-function EquippedRun(props: React.ComponentProps<typeof Game> = {}) {
+const EMPTY_BATTLE_EVENTS: BattleAudioEvents = {attack:0,dash:0,damage:0,kill:0,pickup:0,level:0,chest:0,wave:0,boss:0,bossAttack:0,bossIntro:0,death:0,shipAlarm:0,zoneReward:0,bossHit:0,bossPhase:0,bossBeep:0};
+function EquippedRun({attempt=0,...props}: React.ComponentProps<typeof Game> & {attempt?:number} = {}) {
   const [startId] = useState(createRunId);
   const [equipment,setEquipment] = useState<WorkshopId[] | null>(null);
   const onError=props.onError;
@@ -36,21 +38,33 @@ function EquippedRun(props: React.ComponentProps<typeof Game> = {}) {
     void consumePreparedAdvantages(startId,props.difficulty ?? 'easy').then(items=>{if(alive)setEquipment(items);}).catch(()=>{if(alive)onError?.('No se pudieron preparar las ventajas. Regresa al menú y reintenta.');});
     return()=>{alive=false;};
   },[startId,props.difficulty,onError]);
-  return equipment ? <Game {...props} initialEquipment={equipment} /> : null;
+  return equipment ? <Game key={attempt} {...props} initialEquipment={equipment} /> : null;
 }
-function GameHost({ resumeRequest,onProgress,paused, onPause, onReady, onError, onExit, onChangeDifficulty, difficulty, selection, tutorial, onTutorialComplete, onTutorialStartGame }: {
+function GameHost({ runId, attempt, foreground, preparing, onRestart, resumeRequest,onProgress,paused, onPause, onReady, onError, onExit, onChangeDifficulty, difficulty, selection, tutorial, onTutorialComplete, onTutorialStartGame }: {
+  runId:number; attempt:number; foreground:boolean; preparing:boolean; onRestart:()=>void;
   tutorial: boolean; onTutorialComplete: () => void; onTutorialStartGame: () => void;
   resumeRequest:number; onProgress:(completed:number,total:number)=>void;onChangeDifficulty: () => void; selection: RunSelection;
   difficulty: Difficulty; paused: boolean; onPause: () => void; onReady: () => void; onError: (message: string) => void; onExit: () => void;
 }) {
-  const [runId, setRunId] = useState(0);
+  const epoch=useRef(attempt);useLayoutEffect(()=>{epoch.current=attempt;return()=>{epoch.current=-1;};},[attempt]);
+  const [audioState,setAudioState]=useState<{attempt:number;value:BattleAudioSnapshot}|null>(null);
+  const [audioProgress,setAudioProgress]=useState({attempt,completed:0,total:BATTLE_AUDIO_TOTAL});
+  const publishAudio=useCallback((value:BattleAudioSnapshot)=>{if(epoch.current===attempt)setAudioState({attempt,value});},[attempt]);
+  const preparedAudio=useCallback((completed:number,total:number)=>{if(epoch.current===attempt)setAudioProgress(old=>old.attempt===attempt&&old.completed===completed&&old.total===total?old:{attempt,completed,total});},[attempt]);
+  const snapshot=audioState?.attempt===attempt?audioState.value:null;
+  const preparation=audioProgress.attempt===attempt?audioProgress:{completed:0,total:BATTLE_AUDIO_TOTAL};
   const { ready, error } = useScoreReadiness();
   useEffect(() => { if (error && !tutorial) onError(error); }, [error, onError, tutorial]);
-  const retry = useCallback(() => setRunId(id => id + 1), []);
-  const { playUi } = useGameAudio();
+  const {playUi,initializationError,retryAudio}=useGameAudio();
+  const audioAttempt=useRef(attempt);
+  useLayoutEffect(()=>{if(audioAttempt.current!==attempt){audioAttempt.current=attempt;if(initializationError)retryAudio?.();}},[attempt,initializationError,retryAudio]);
   const pauseSound = useCallback(() => playUi('pause'), [playUi]);
+  const recordIdentified = useCallback((id: SpecialEnemyId) => {
+    if (!tutorial && (selection.mode === 'survival' || selection.encounter === 'infinite')) recordPurgatorioVictory(id);
+  }, [tutorial, selection]);
   return <View style={{ flex: 1 }}>
-    {tutorial ? <Game key={`tutorial-${runId}`} tutorial initialEquipment={[]} difficulty="easy" selection={SURVIVAL_SELECTION} resumeRequest={resumeRequest} onProgress={onProgress} paused={paused} onPause={onPause} onPausePressIn={pauseSound} onReady={onReady} onError={onError} onExit={onExit} onTutorialComplete={onTutorialComplete} onTutorialStartGame={onTutorialStartGame}/> : ready && <EquippedRun resumeRequest={resumeRequest} onProgress={onProgress} key={runId} difficulty={difficulty} selection={selection} onPurgatorioClear={recordPurgatorioVictory} onRetry={retry} onExit={onExit} onChangeDifficulty={onChangeDifficulty} paused={paused} onPause={onPause} onPausePressIn={pauseSound} onReady={onReady} onError={onError} />}
+    <BattleAudio sessionKey={attempt} preparationActive={foreground&&(preparing||!paused)} onPrepared={preparedAudio} onError={onError} active={!paused&&snapshot?.active===true} suspended={snapshot?.mode!=='playing'} dead={snapshot?.mode==='dead'} events={snapshot?.events??EMPTY_BATTLE_EVENTS}/>
+    {tutorial ? <Game key={`tutorial-${attempt}`} externalAudioProgress={preparation} onAudioState={publishAudio} tutorial initialEquipment={[]} difficulty="easy" selection={SURVIVAL_SELECTION} resumeRequest={resumeRequest} onProgress={onProgress} paused={paused} onPause={onPause} onPausePressIn={pauseSound} onReady={onReady} onError={onError} onExit={onExit} onTutorialComplete={onTutorialComplete} onTutorialStartGame={onTutorialStartGame}/> : ready && <EquippedRun attempt={attempt} externalAudioProgress={preparation} onAudioState={publishAudio} resumeRequest={resumeRequest} onProgress={onProgress} key={runId} difficulty={difficulty} selection={selection} onPurgatorioClear={recordIdentified} onRetry={onRestart} onExit={onExit} onChangeDifficulty={onChangeDifficulty} paused={paused} onPause={onPause} onPausePressIn={pauseSound} onReady={onReady} onError={onError} />}
   </View>;
 }
 export default function Application() {
@@ -70,6 +84,7 @@ function PreparedApplication() {
   useEffect(() => { mounted.current=true; void loadTutorialProgress(); return () => { mounted.current=false; }; }, []);
   const [difficulty, setDifficulty] = useState<Difficulty>('easy');
   const [selection, setSelection] = useState<RunSelection>(SURVIVAL_SELECTION);
+  const [runId,setRunId]=useState(0),[attempt,setAttempt]=useState(0);
   useEffect(() => { void loadPurgatorioProgress(); }, []);
   const [active, setActive] = useState(AppState.currentState === 'active');
   const [loading, setLoading] = useState<Load | null>(null);
@@ -80,14 +95,22 @@ function PreparedApplication() {
   const retrySelection = useRef<RunSelection | null>(null);
   const workshopReturn = useRef<'/' | '/difficulty' | '/purgatorio'>('/');
   useLayoutEffect(() => { flow.current = loading; }, [loading]);
-  const beginLoading = useCallback((kind: Load['kind'], stage: Stage = 'coverSource', destination?: '/difficulty') => {
+  const beginLoading = useCallback((kind: Load['kind'], stage: Stage = 'coverSource', destination?: '/difficulty', restart=false) => {
     const selection = chooseLoading(previous.current);
     previous.current = { entityId: selection.entity.id, tipIndex: selection.tipIndex };
-    const next: Load = { id: ++generation.current, kind, stage, selection, destination, progress:0,targetReady: false, visualReady: false, error: null };
+    const next: Load = { id: ++generation.current, kind, stage, selection, destination, restart, progress:0,targetReady: false, visualReady: false, error: null };
     flow.current = next;
     pauseAfterLoading.current = false;
     setLoading(next);
   }, []);
+  const restart=useCallback(()=>{
+    if(!playing||flow.current)return;
+    beginLoading('game','awaitVisual',undefined,true);setRunId(id=>id+1);setAttempt(id=>id+1);router.replace('/game');
+  },[playing,beginLoading]);
+  const retryLoad=useCallback(()=>{
+    if(!flow.current?.error||flow.current.kind!=='game')return;
+    beginLoading('game','awaitVisual',undefined,true);setAttempt(id=>id+1);router.replace('/game');
+  },[beginLoading]);
   const loadingSource = loading?.selection.entity.source;
   useEffect(() => {
     if (loadingSource === undefined) return;
@@ -243,7 +266,7 @@ function PreparedApplication() {
       <UIArtProvider><SessionContext.Provider value={{ playing, tutorial, openTutorial, beginTutorial, skipTutorial, difficulty, openWorkshop, openScores, openMissions, openPurgatorio, startPurgatorio, setDifficulty: selectModeDifficulty, start, selectDifficulty, abandon, pause, resume, settings, closeSettings }}>
         <View style={styles.root}>
           <View style={StyleSheet.absoluteFill} pointerEvents={loading ? 'none' : 'box-none'}>
-            {playing ? <GameHost tutorial={tutorial} onTutorialComplete={completeTutorial} onTutorialStartGame={tutorialStartGame} resumeRequest={resumeRequest} onProgress={markGameProgress} selection={selection} difficulty={difficulty} paused={Boolean(loading) || path !== '/game' || !active} onPause={pause} onReady={markGameReady} onError={gameError} onExit={abandon} onChangeDifficulty={changeDifficulty} />
+            {playing ? <GameHost runId={runId} attempt={attempt} foreground={active} preparing={loading?.kind==='game'} onRestart={restart} tutorial={tutorial} onTutorialComplete={completeTutorial} onTutorialStartGame={tutorialStartGame} resumeRequest={resumeRequest} onProgress={markGameProgress} selection={selection} difficulty={difficulty} paused={Boolean(loading) || path !== '/game' || !active} onPause={pause} onReady={markGameReady} onError={gameError} onExit={abandon} onChangeDifficulty={changeDifficulty} />
               : <MenuBackdrop active={active && !loading} onReady={markMenuReady} onError={menuError} />}
           </View>
           <View style={StyleSheet.absoluteFill} pointerEvents={loading ? 'none' : 'box-none'}
@@ -251,6 +274,7 @@ function PreparedApplication() {
             <Slot />
           </View>
           {loading && showCard && <LoadingScreen key={loading.id} selection={loading.selection} active={cardActive}
+            minimumMs={loading.restart?0:undefined} onRetry={loading.kind==='game'?retryLoad:undefined}
             progress={loading.targetReady&&loading.visualReady?100:Math.min(99,Math.floor((loading.progress??0)*90+(loading.visualReady?10:0)))} presented={stage === 'loading'} ready={loading.targetReady && loading.visualReady && !loading.error} error={loading.error}
             onReady={markVisualReady} onExited={finishLoading} onDismiss={dismissLoading} />}
           {loading && stage === 'awaitVisual' && !loading.error && <View testID="loading-curtain" style={styles.curtain} />}

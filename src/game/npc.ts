@@ -13,6 +13,7 @@ export const NPC_ANIMATIONS = {
 export type NpcKind = 'ghoul' | 'spitter' | 'summoner';
 export type NpcAction = 'idle' | keyof typeof NPC_ANIMATIONS;
 export type Npc = {
+  summonOwner?: number;
   eventOwner?: number; eliteEventId?: number; hp?: number; maxHp?: number; eliteSpeed?: number;
   id: number; active: boolean; x: number; y: number; facingX: number;
   kind?: NpcKind; action: NpcAction; actionMs: number; lastHitSerial: number;

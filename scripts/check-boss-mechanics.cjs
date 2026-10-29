@@ -24,7 +24,7 @@ function load(relative) {
 }
 const api = load('src/game/survival.ts'), players = load('src/game/player.ts');
 const nav = load('src/game/navigation.ts'), collision = load('src/game/collision.ts');
-const { BOSS_BALANCE, BOSS_MODES } = load('src/game/bossBalance.ts');
+const { BOSS_BALANCE, BOSS_MODES, RANGED_PHASE_BALANCE } = load('src/game/bossBalance.ts');
 const { hazardHits } = load('src/game/bossHazards.ts');
 const { beamDraws, hazardIsActive } = load('src/game/bossEffects.ts');
 const { worldRandom } = load('src/game/worldEvents.ts');
@@ -86,6 +86,41 @@ function killBoss(state) {
   assert.equal(state.boss.phase,'death','Actual sword strike kills the actor');return state;
 }
 
+for(const mode of ['easy','hard','dystopia'])test('Widow '+mode+' own summons respect cap, release deaths and leave other sources independent',()=>{
+  let s=fixture('tarnished-widow',mode);s.bossActionUntilMs=1e9;
+  const owner=s.boss.entityId,cap=BOSS_BALANCE.widowSummonLimit[mode],otherOwner=owner+999;
+  s.encounter.enemies=s.encounter.enemies.map((n,i)=>({...n,active:i<cap+2,action:'idle',x:origin.x+260,y:origin.y+80,summonOwner:i<cap-2?owner:i<cap?otherOwner:undefined}));
+  const own=state=>liveNpcs(state).filter(n=>n.summonOwner===owner).length;
+  const burst=()=>{s.hazards=[{id:9000+s.clockMs,owner,kind:'blast',x:origin.x+140,y:origin.y,angle:0,radius:70,ageMs:0,warningMs:0,activeMs:500,damage:1,npcBurst:10}];s=step(s);};
+  burst();assert.equal(own(s),cap);assert.equal(liveNpcs(s).filter(n=>n.summonOwner===otherOwner).length,2);assert.equal(liveNpcs(s).filter(n=>n.summonOwner===undefined).length,2);
+  burst();assert.equal(own(s),cap,'A second impact cannot exceed the owner-specific cap');
+  const victim=s.encounter.enemies.findIndex(n=>n.active&&n.summonOwner===owner);s.encounter.enemies[victim]={...s.encounter.enemies[victim],active:false,action:'death'};
+  burst();assert.equal(own(s),cap,'A death releases one slot for a later invocation');
+  s.encounter={...s.encounter,phase:'spawning',remaining:1,spawnMs:0};s=step(s);assert.equal(s.encounter.remaining,0,'Normal wave spawns continue despite the full Widow quota');assert(liveNpcs(s).length>cap);
+});
+test('Widow natural cycles reduce invocation frequency and never summon on consecutive attacks',()=>{
+  let s=fixture('tarnished-widow');const summoned=[],seen=new Set();
+  for(let turn=0;turn<24;turn++){
+    s.encounter.enemies=s.encounter.enemies.map(n=>({...n,active:false}));s.hazards=[];
+    s.boss={...s.boss,x:origin.x+140,y:origin.y,phase:'recover',phaseMs:10000};s.bossActionUntilMs=0;s=step(s);
+    for(let n=0;n<260&&s.boss.phase!=='recover';n++){
+      s=step(s);for(const h of s.hazards)if(h.npcBurst&&!seen.has(h.id)){seen.add(h.id);summoned.push(turn);}
+    }
+    assert.equal(s.boss.phase,'recover');
+  }
+  assert(summoned.length>=4&&summoned.length<=9,'Previously 16 of these 24 attacks invoked; the cooldown approximately halves it: '+summoned.length);
+  assert(summoned.every((turn,i)=>!i||turn-summoned[i-1]>1),'No consecutive summoning attacks');
+});
+for(const mode of ['easy','hard','dystopia'])test('Final HP modifiers '+mode+' affect only Widow, Rock and both bandits exactly once',()=>{
+  for(const id of ['tarnished-widow','rock-boss','dagger-bandit','dagger-mush','archer']){
+    const s=fixture(id,mode),spec=load('src/game/enemyCatalog.ts').ENEMY_DEFS[id];
+    const tuning=load('src/game/purgatorio.ts').purgatorioTuning(1,mode);
+    const baseline=Math.ceil(spec.hp*BOSS_MODES[mode].hp*tuning.hpMultiplier)*(id==='rock-boss'?.7:1);
+    const expected=baseline*(mode==='easy'&&BOSS_BALANCE.easyReducedHealthIds.includes(id)?.8:1);
+    assert.equal(s.boss.maxHp,expected);assert.equal(s.boss.hp,expected);assert.equal(step(s).boss.maxHp,expected);
+    if(s.partner)assert.equal(s.partner.maxHp,s.boss.maxHp);
+  }
+});
 test('native serialized entry point and pause keep every combat timer inert',()=>{
   const native=api.advanceSurvival;
   assert(native.__initData?.code);
@@ -132,16 +167,16 @@ test('Sage retreats, stays still while charging, alternates self and distant act
 test('Archer laser has rotated continuous geometry, active-only collision, and low-HP gated cooldown teleport',()=>{
   let state=begin('archer',0,'easy',{y:origin.y+70}),h=state.hazards[0];
   assert(h.kind==='beam'&&Math.abs(Math.sin(h.angle))>.1,'Laser aims along diagonal to player');
-  assert.equal(beamDraws(h)[0].angle,h.angle);
+  assert.equal(beamDraws({...h,length:h.maxLength})[0].angle,h.angle);
   assert.equal(hazardIsActive(h),false);
   const offset={...origin,x:h.x+Math.cos(h.angle)*180,y:h.y+Math.sin(h.angle)*180};
-  assert(hazardHits(h,offset));assert(!hazardHits(h,{...offset,x:offset.x-Math.sin(h.angle)*100,y:offset.y+Math.cos(h.angle)*100}));
+  assert(hazardHits({...h,length:h.maxLength},offset));assert(!hazardHits({...h,length:h.maxLength},{...offset,x:offset.x-Math.sin(h.angle)*100,y:offset.y+Math.cos(h.angle)*100}));
   state=until(state,s=>s.hazards.some(h=>hazardIsActive(h)),100);
-  h=state.hazards[0];state.invulnerableMs=0;const hp=state.hp;state=step(state,8,origin);assert.equal(state.hp,hp-1,'Active ray damages player');
-  for(const ratio of [1,.5]) {let high=fixture('archer');Object.assign(high.boss,{phaseMs:10000,pattern:2,hp:high.boss.maxHp*ratio,teleportCooldownMs:0});high=step(high);assert.equal(high.boss.attackIndex,0,'No teleport at or above half HP');}
+  h=state.hazards[0];state.invulnerableMs=0;const hp=state.hp;state=until(state,s=>s.hp<hp,40,8);assert.equal(state.hp,hp-1,'Propagating active ray damages player');
+  for(const ratio of [1,.51]) {let high=fixture('archer');Object.assign(high.boss,{phaseMs:10000,pattern:2,hp:high.boss.maxHp*ratio,teleportCooldownMs:0});high=step(high);assert.equal(high.boss.attackIndex,0,'No teleport above half HP');}
   let tele=fixture('archer');Object.assign(tele.boss,{phaseMs:10000,pattern:2,hp:7,teleportCooldownMs:0});tele=step(tele);
   assert.equal(tele.boss.attackIndex,1);const tell=tele.hazards[0];assert.equal(tell.kind,'teleport');assert(Math.hypot(tell.x-origin.x,tell.y-origin.y)>=150);
-  tele=until(tele,s=>s.boss.moveDone===true);assert.equal(tele.boss.x,tell.x);assert.equal(tele.boss.y,tell.y);assert(tele.boss.teleportCooldownMs>6000);
+  tele=until(tele,s=>s.boss.moveDone===true);assert.equal(tele.boss.x,tell.x);assert.equal(tele.boss.y,tell.y);assert(tele.boss.teleportCooldownMs<=RANGED_PHASE_BALANCE.archer.easy.teleportMs&&tele.boss.teleportCooldownMs>0);
   tele.boss={...tele.boss,phase:'recover',phaseMs:10000,pattern:2};tele.bossActionUntilMs=0;tele=step(tele);assert.equal(tele.boss.attackIndex,0,'Cooldown prevents consecutive teleports');
 });
 for(const mode of ['easy','hard','dystopia'])test('Bomb Droid '+mode+' staggered real group preserves six HP',()=>{
@@ -280,7 +315,7 @@ test('Rock laser traverses camera left/right, remains aligned and boosts below h
     for(let n=0;n<50&&state.boss.phase==='attack';n++) {state=step(state,40,origin,origin,view);const beam=state.hazards.find(h=>h.kind==='beam');if(beam){assert(Math.abs(beam.x-state.boss.x-Math.cos(beam.angle)*28)<1e-8);assert(Math.abs(beam.y-state.boss.y+26-Math.sin(beam.angle)*28)<1e-8);assert.equal(beam.angle,Math.PI/2);}assert(state.boss.x>=view.left+54&&state.boss.x<=view.right-54);}
     assert(direction*(state.boss.x-start)<-80,'Rock crosses toward opposite camera edge');
   }
-  let state=fixture('rock-boss');state.bossActionUntilMs=1e9;let powered=copy(state);powered.boss.hp=40;const x=state.boss.x;state=step(state);powered=step(powered);assert(Math.abs(powered.boss.x-x)>Math.abs(state.boss.x-x)*1.7);
+  let state=fixture('rock-boss');state.bossActionUntilMs=1e9;let powered=copy(state);powered.boss.hp=powered.boss.maxHp*.45;const x=state.boss.x;state=step(state);powered=step(powered);assert(Math.abs(powered.boss.x-x)>Math.abs(state.boss.x-x)*1.7);
 });
 test('Widow explosion inflicts actual impact plus two finite poison ticks and exactly ten NPCs',()=>{
   let state=begin('tarnished-widow',1);state.hp=10;state.maxHp=10;state.invulnerableMs=0;

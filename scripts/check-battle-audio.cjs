@@ -18,7 +18,7 @@ const filename = path.join(root, 'src/ui/BattleAudio.tsx');
 const moduleObject = { exports: {} };
 const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
 vm.runInNewContext(code, {
-  module: moduleObject, exports: moduleObject.exports, console: { warn: text => h.warnings.push(text) }, Date: { now: () => now },
+  module: moduleObject, exports: moduleObject.exports, console: { warn: text => h.warnings.push(text) }, Date: { now: () => now },setTimeout,clearTimeout,
   require: function resolve(name) {
     if (name === 'react') return react;
     if (name === './useQueuedAudioPlayer') return {useQueuedAudioPlayer:(source,options)=>resolve('expo-audio').useAudioPlayer(source,options),loadQueuedAudioPlayer:()=>Promise.resolve()};
@@ -26,7 +26,7 @@ vm.runInNewContext(code, {
       const m={exports:{}},f=path.resolve(path.dirname(filename),name+'.ts');
       vm.runInNewContext(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{module:m,exports:m.exports,require:resolve});return m.exports;
     }
-    if (name === './audioPreparation') {const m={exports:{}};const f=path.join(root,'src/ui/audioPreparation.ts');vm.runInNewContext(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{module:m,exports:m.exports,setTimeout(fn,ms){assert.equal(ms,8000);h.audioTimers??=new Map();const id=h.nextAudioTimer=(h.nextAudioTimer??0)+1;h.audioTimers.set(id,fn);return id;},clearTimeout(id){h.audioTimers?.delete(id);}});return m.exports;}
+    if (name === './audioPreparation') {const m={exports:{}};const f=path.join(root,'src/ui/audioPreparation.ts');vm.runInNewContext(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{module:m,exports:m.exports,setTimeout(fn,ms){assert([8000,30000].includes(ms));h.audioTimers??=new Map();const id=h.nextAudioTimer=(h.nextAudioTimer??0)+1;h.audioTimers.set(id,fn);return id;},clearTimeout(id){h.audioTimers?.delete(id);}});return m.exports;}
     if (name === './AudioProvider') return { useGameAudio: () => h.audio };
     if (name === 'react-native') return { AppState: { currentState: 'active', addEventListener(type, callback) { assert.equal(type, 'change'); listener = callback; return { remove: () => { listener = null; } }; } } };
     if (name === 'expo-audio') return { useAudioPlayer(source, options) { return react.useMemo(() => {
@@ -44,7 +44,10 @@ h = { slots: [], cursor: 0, effects: [], players: [], warnings: [], audio: { rea
 function render(patch = {}) { for(const p of h.players)if(p.playing&&p.source.endsWith('.wav')){const b=fs.readFileSync(path.resolve(path.dirname(filename),p.source));const duration=(b.length-44)/b.readUInt32LE(28)*1000;if(now-p.startedAt>=duration)p.pause();} Object.assign(h.props, patch); h.cursor = 0; BattleAudio(h.props); for (const effect of h.effects.splice(0)) effect(); }
 function event(patch) { now += 300; render({ events: { ...h.props.events, ...patch } }); }
 function settings(patch) { h.audio.settings = { ...h.audio.settings, ...patch }; render(); }
-render();
+(async()=>{
+render();await Promise.resolve();await Promise.resolve();
+for(const p of h.players.filter(p=>p.source.endsWith('.mp3')))for(const seek of p.seeks)seek.resolve();
+for(let i=0;i<8;i++)await Promise.resolve();render();
 const music = h.players.find(p => p.source.endsWith('heavy_battle_1_bpm190.mp3'));
 const deathMusic = h.players.find(p => p.source.endsWith('die menu.mp3'));
 const cue = name => h.players.find(p => p.source.endsWith(`/mixed/${name==='dash'?'dash-jugador':'legacy-'+name}.wav`));
@@ -168,10 +171,17 @@ for(let n=1;n<=12;n++){
   assert(effects.filter(p=>p.playing).length<=3);
 }
 
+const residentPlayers=[...h.players],preparedCheckpoints=[];
+render({sessionKey:1,active:false,dead:false,suspended:false,onPrepared:(...value)=>preparedCheckpoints.push(value),events:Object.fromEntries(Object.keys(h.props.events).map(key=>[key,0]))});
+assert(h.players.every(p=>!p.playing));for(let n=0;n<4;n++)await Promise.resolve();
+for(const p of h.players.filter(p=>p.source.endsWith('.mp3')))for(const seek of p.seeks)seek.resolve();for(let n=0;n<8;n++)await Promise.resolve();render();
+assert.deepEqual(h.players,residentPlayers,'Restart reuses all 34 native players');assert.deepEqual(preparedCheckpoints.at(-1),[36,36],'Readiness includes actual native initialization and rewind');
+assert(h.players.every(p=>!p.playing),'Prepared audio remains stopped behind the loading screen');render({active:true});assert(music.playing);
+const rewinds=music.seeks.length;render({active:false,preparationActive:false});render({active:true,preparationActive:true});assert.equal(music.seeks.length,rewinds,'Pause/resume cannot rewind already prepared music');
 const lastPlays = h.players.map(p => p.plays);
 for (const slot of h.slots) slot?.cleanup?.();
 assert.equal(listener, null); assert.ok(h.players.every(p => !p.playing), 'Unmount pauses everything');
-(async () => {
+await (async () => {
   for (const player of h.players) for (const pending of player.seeks) pending.resolve();
   await Promise.resolve(); assert.deepEqual(h.players.map(p => p.plays), lastPlays, 'No stale seek replay after cleanup');
   const normalized=JSON.parse(fs.readFileSync(path.join(root,'assets/sounds/mixed/sources.json'),'utf8'));
@@ -199,10 +209,11 @@ assert.equal(listener, null); assert.ok(h.players.every(p => !p.playing), 'Unmou
   }
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'assets/sounds/music/heavy_battle_1_bpm190.mp3'))).digest('hex'), '790bf97caead77553df5b75aa658323750ba2816df3071616c207612c6d69d7e');
   assert.ok(fs.readFileSync(path.join(root, 'assets/sounds/music/BATTLE_LICENSE.md'), 'utf8').includes('CC0'));
-  const oldHarness=h;const checkpoints=[];h={slots:[],cursor:0,effects:[],players:[],warnings:[],loadInitially:false,audio:oldHarness.audio,props:{...oldHarness.props,active:true,suspended:false,dead:false,events:Object.fromEntries(Object.keys(oldHarness.props.events).map(k=>[k,0])),onPrepared:(c,total)=>checkpoints.push([c,total])}};
+  const oldHarness=h;const checkpoints=[],essentialErrors=[];h={slots:[],cursor:0,effects:[],players:[],warnings:[],loadInitially:false,audio:oldHarness.audio,props:{...oldHarness.props,active:true,suspended:false,dead:false,events:Object.fromEntries(Object.keys(oldHarness.props.events).map(k=>[k,0])),onError:message=>essentialErrors.push(message),onPrepared:(c,total)=>checkpoints.push([c,total])}};
   render();assert(h.players.every(p=>!p.playing),'No soundtrack/effect can start during actual pending readiness');const lateAttack=h.players.find(p=>p.source.endsWith('/mixed/legacy-attack.wav')),lateLevel=h.players.find(p=>p.source.endsWith('/mixed/legacy-level.wav'));
-  for(const p of h.players)if(p!==lateAttack&&p!==lateLevel)p.emit({isLoaded:true,error:null});lateAttack.emit({isLoaded:false,error:'fixture optional failure'});assert.equal(checkpoints.at(-1)[0],33);assert(h.players.every(p=>!p.playing));
-  for(const fn of [...h.audioTimers.values()])fn();assert.deepEqual(checkpoints.at(-1),[34,34]);assert.equal(h.audioTimers.size,0);render();assert(h.players.find(p=>p.source.endsWith('heavy_battle_1_bpm190.mp3')).playing,'Valid ready track starts without an extra fixed wait');event({attack:1,level:1});assert.equal(lateAttack.plays,0);assert.equal(lateLevel.plays,0);
-  lateAttack.emit({isLoaded:true,error:null});lateLevel.emit({isLoaded:true,error:null});event({attack:2,level:2});assert.equal(lateAttack.plays,0);assert.equal(lateLevel.plays,1,'A delayed cue recovers after real native readiness; actual decode failures stay disabled');for(const slot of h.slots)slot?.cleanup?.();h=oldHarness;
+  for(let n=0;n<8;n++)await Promise.resolve();for(const p of h.players)if(p!==lateAttack&&p!==lateLevel){p.emit({isLoaded:true,error:null});for(let n=0;n<8;n++)await Promise.resolve();}lateAttack.emit({isLoaded:false,error:'fixture essential failure'});render();assert(essentialErrors.some(message=>message.includes('attack')));assert(h.players.every(p=>!p.playing));
+  for(const fn of [...h.audioTimers.values()])fn();render();assert(essentialErrors.some(message=>message.includes('level')));assert.equal(h.audioTimers.size,0);assert(h.players.every(p=>!p.playing),'Essential failures stay behind the loading fence and expose retry instead of incomplete combat');
+  for(const slot of h.slots)slot?.cleanup?.();h=oldHarness;
   console.log('Battle audio OK: 34 persistent players, original menu restored, new source cues, silent EXP, attack cues, exact death track, volume/mute, pause/background/retry, rate limits and <=3 effect voices.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error=>{console.error(error);process.exitCode=1;});

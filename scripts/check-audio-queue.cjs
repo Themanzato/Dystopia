@@ -1,7 +1,7 @@
 /* global __dirname */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
 let now=0,id=0;const timers=new Map();
-function timer(fn,ms){assert.equal(ms,8000);timers.set(++id,{at:now+ms,fn});return id;}
+function timer(fn,ms){assert([8000,30000].includes(ms));timers.set(++id,{at:now+ms,fn});return id;}
 function tick(ms){const end=now+ms;while(true){const next=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;now=next[1].at;timers.delete(next[0]);next[1].fn();}now=end;}
 function compile(file,require=()=>{throw Error('Unexpected dependency')}){const m={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/ui',file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{module:m,exports:m.exports,require,setTimeout:timer,clearTimeout:key=>timers.delete(key)});return m.exports;}
 const {prepareAudioQueue,AUDIO_PREPARATION_CONCURRENCY}=compile('audioPreparation.ts');assert.equal(AUDIO_PREPARATION_CONCURRENCY,3);
@@ -35,6 +35,16 @@ function setup(n){
  const empty=player();empty.currentStatus={isLoaded:true};let invoked=0,readyCount=0;
  const cancelEmpty=prepareAudioQueue({empty},async p=>{invoked++;p.emit({isLoaded:true});},()=>{},()=>readyCount++,()=>{},()=>{},()=>{});assert.equal(readyCount,0,'An empty SDK57 web status must not bypass source loading');await flush();assert.equal(invoked,1);assert.equal(readyCount,1);cancelEmpty();assert.equal(timers.size,0);
  console.log('PASS SDK57 empty-player currentStatus cannot skip real source loading');
+ const essentialPlayers={attack:player(),music:player(),dash:player(),boss:player()},essentialLoads=[],essentialFailures=[];let essentialDone=0;
+ const stopEssential=prepareAudioQueue(essentialPlayers,p=>new Promise(resolve=>essentialLoads.push({p,resolve})),()=>{},()=>essentialDone++,()=>{},()=>{},()=>{}, {essential:Object.keys(essentialPlayers),essentialError:(...error)=>essentialFailures.push(error)});
+ await flush();tick(8000);assert.equal(essentialDone,0,'Idle optional deadline cannot release essential resources');assert.equal(essentialLoads.length,3);
+ for(let i=0;i<4;i++){const job=essentialLoads[i];assert(job);job.resolve();await flush();job.p.emit({isLoaded:true});await flush();}
+ assert.equal(essentialDone,1);assert.equal(essentialFailures.length,0);stopEssential();assert.equal(timers.size,0);
+ const stalled=player();let failures=0;
+ const stopStalled=prepareAudioQueue({stalled},()=>new Promise(()=>{}),()=>{},()=>{},()=>{},()=>{},()=>{},{essential:['stalled'],essentialError:()=>failures++});await flush();tick(30000);assert.equal(failures,1);stalled.emit({isLoaded:true});assert.equal(failures,1);stopStalled();assert.equal(timers.size,0);
+ console.log('PASS essential resources wait for actual readiness beyond optional deadline; bounded transfer failure exposes one retry error and cleans listeners');
+ const retryPlayer=player();retryPlayer.currentStatus={isLoaded:false,error:'previous attempt'};let retryDone=0,retryFailed=0;
+ const stopRetry=prepareAudioQueue({retryPlayer},async p=>{p.emit({isLoaded:true,error:null});},()=>{},()=>retryDone++,()=>retryFailed++,()=>{},()=>{},{essential:['retryPlayer']});await flush();assert.equal(retryDone,1);assert.equal(retryFailed,0,'Retry must replace a source instead of inheriting its old native error');stopRetry();assert.equal(timers.size,0);
  // Test the actual Expo-facing hook, not the passthrough mock in battle UI tests.
  let cleanup,assetResolve;const native=player(),sources=[],assets=[];
  const expo=compile('useQueuedAudioPlayer.ts',name=>{
@@ -44,6 +54,7 @@ function setup(n){
   throw Error(name);
  });
  const p=expo.useQueuedAudioPlayer(123,{downloadFirst:true,updateInterval:1000});assert.equal(sources[0][0],null);assert.equal(sources[0][1].downloadFirst,false);assert.equal(assets.length,0,'No implicit render-time download');const loading=expo.loadQueuedAudioPlayer(p,()=>true);assert.equal(assets.length,1);assert.equal(native.replaceCount,0);assetResolve();await loading;assert.equal(native.replaceCount,1);cleanup();
- expo.useQueuedAudioPlayer(124,{});let alive=true;const cancelled=expo.loadQueuedAudioPlayer(p,()=>alive);alive=false;cleanup();assetResolve();await cancelled;assert.equal(native.replaceCount,1);
+ expo.useQueuedAudioPlayer(123,{});await expo.loadQueuedAudioPlayer(p,()=>true);assert.equal(assets.length,1,'Resolved local files are reused across runs');assert.equal(native.replaceCount,2);cleanup();
+ expo.useQueuedAudioPlayer(124,{});let alive=true;const cancelled=expo.loadQueuedAudioPlayer(p,()=>alive);alive=false;cleanup();assetResolve();await cancelled;assert.equal(native.replaceCount,2);
  console.log('PASS SDK57 hook starts empty, resolves the local asset first, then replaces; cancellation never replaces a released player');
 })().catch(e=>{console.error(e);process.exitCode=1;});

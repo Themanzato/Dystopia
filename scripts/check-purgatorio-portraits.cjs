@@ -32,4 +32,14 @@ for(ratio of [1,2,3]){
  const webHeights=group.props.children.map(child=>web(child.props).props.children.props.style.height);
  assert.equal(webHeights[0],webHeights[1]);
 }
-console.log('Purgatorio portraits passed: all14 original sources, native physical-pixel nearest sampling at DPR1/2/3, bounded cached surfaces/disposal and proportional web alpha crops with original PNG dimensions. Native rendering API mocked; actual web gallery reviewed separately.');
+for(ratio of [1,2,3]){
+ const group=pair({id:'the-plague',width:150,height:68});assert.equal(group.props.testID,'plague-swarm-preview');
+ assert.equal(group.props.children.length,4,'One selectable swarm previews every real insect type');
+ assert.equal(new Set(group.props.children.map(c=>c.props.entity.id)).size,4);
+ for(const child of group.props.children){
+  const {entity,sheetSize}=child.props;assert.equal(sheetSize.width,fs.readFileSync(entity.source).readUInt32BE(16));assert.equal(sheetSize.height,entity.cell.height);
+  child.type(child.props);const crop=draws.at(-1).source;assert.equal(crop.x,entity.bounds.x);assert.equal(crop.width,entity.bounds.width);
+  const rendered=web(child.props),image=rendered.props.children.props.children;assert.equal(image.props.source,entity.source);assert.equal(rendered.props.children.props.style.overflow,'hidden');
+ }
+}
+console.log('Purgatorio portraits passed: all15 original sources, native physical-pixel nearest sampling at DPR1/2/3, bounded cached surfaces/disposal and proportional web alpha crops with original PNG dimensions. Native rendering API mocked; actual web gallery reviewed separately.');

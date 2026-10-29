@@ -8,7 +8,7 @@ export const BOSS_ATTACKS: Partial<Record<EnemyId, BossAttack[]>> = {
   electrocutioner:[attack('release','lightning',750,0,220,40,0,950,1150),attack('storm','area',2200,930,1600,82,0,850,1300),{...attack('tele','teleport',1200,780,800,0,0,850,1150),followup:'intro',split:.65}],
   shielder: [attack('attack','melee',1200,380,720,94,145),attack('range','projectile',1400,580,1080,520,0,850,1400)],
   'evil-sage': [attack('attack','explosion',1200,500,820,115,0,900,1300),attack('attack','explosion',1200,500,820,95,0,1050,1350)],
-  archer: [attack('laser','laser',1500,350,1150,1200,0,1000,1400,16),attack('tele','teleport',1000,500,550,0,0,850,1200)],
+  archer: [attack('laser','laser',1500,350,1150,1200,0,1000,1400,16),{...attack('tele','teleport',1000,500,550,0,0,850,1200),followup:'teleIn',split:.5}],
   'bomb-droid': [attack('attack','area',1333,500,1000,85,105,800,900)],
   'dagger-mush': [attack('attack','charge',833,250,650,85,245,700,1000),attack('spin','charge',1000,240,740,78,285,650,1100),attack('attack','charge',833,250,650,85,260,650,950)],
   'shock-sweeper': [attack('attack','melee',667,160,500,115,120),attack('slam','slam',1200,620,900,110,0,1000,1600)],
